@@ -459,3 +459,10 @@ button.pf-count[aria-expanded="true"]{border-color:var(--accent);background:var(
 .sheet.page .seasons,.seasons{grid-template-columns:minmax(0,1fr)!important}
 .season.film{background:transparent}
 .season.film .fam-open{padding-left:18px}
+/* ignored seasons */
+.s-acts{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex:none}
+.s-skip{all:unset;cursor:pointer;font-size:12px;color:var(--ink-3);padding:2px 6px;border-radius:6px}
+.s-skip:hover{color:var(--ink);text-decoration:underline}
+.s-skip:focus-visible{outline:2px solid var(--accent)}
+.season.skipped{opacity:.55}
+.season.skipped .thumb{filter:grayscale(1)}

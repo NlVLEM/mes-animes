@@ -199,12 +199,33 @@ function airedIn(d, n){
   if (s.air && s.air > today()) return 0;
   return s.eps;
 }
-const airedTotal = d => d.seasons.reduce((a,s)=>a+airedIn(d,s.n),0);
+// seasons someone chose not to watch: ignored one by one, or everything after the season where they stopped
+const skipped = (e, n) => !!e && n>0 && (((e.skip||[]).includes(n)) || (e.stop!=null && n > e.stop));
+const liveSeasons = (d, e) => d.seasons.filter(s => !skipped(e, s.n));
+const airedTotal = (d, e) => liveSeasons(d, e).reduce((a,s)=>a+airedIn(d,s.n),0);
+const seenTotal = (d, e) => liveSeasons(d, e).reduce((a,s)=>a+Math.min((e&&e.w||{})[s.n]||0, airedIn(d,s.n)),0);
 const watchedTotal = e => Object.entries(e.w||{}).filter(([n])=>+n>0).reduce((a,[,v])=>a+(v||0),0);
 function currentSeason(d, e){
-  const w = e.w||{};
-  const s = d.seasons.find(s => (w[s.n]||0) < airedIn(d, s.n)) || d.seasons.find(s => (w[s.n]||0) < s.eps) || d.seasons[d.seasons.length-1];
+  const w = e.w||{}, live = liveSeasons(d, e);
+  const s = live.find(s => (w[s.n]||0) < airedIn(d, s.n)) || live.find(s => (w[s.n]||0) < s.eps) || live[live.length-1] || d.seasons[d.seasons.length-1];
   return s ? s.n : 1;
+}
+// what the status should be given what is ticked
+function statusFor(d, e, w){
+  if (!e || e.st==='dropped') return e && e.st;
+  const ee = {...e, w}, live = liveSeasons(d, ee);
+  const allOut = live.length && live.every(x => (w[x.n]||0) >= airedIn(d, x.n)) && live.some(x => airedIn(d, x.n) > 0);
+  const nextIsLive = d.next && !skipped(ee, d.next.s);
+  const any = Object.entries(w).some(([k,v]) => +k>0 && v>0);
+  return allOut && !nextIsLive ? 'done' : any ? 'watching' : e.st;
+}
+function reconcile(key, extra={}){
+  const e = entries.get(key), d = dcache[key]; if (!e || !d || d.kind!=='tv') return save(key, extra);
+  const merged = {...e, ...extra}, want = statusFor(d, merged, merged.w||{});
+  const patch = {...extra};
+  if (want && want!==e.st){ patch.st = want; if (want==='done') patch.finished = Date.now(); }
+  save(key, patch);
+  if (patch.st){ const prev = e.st; toast(want==='done' ? `${d.t} est rangé dans Vus` : `${d.t} est dans En cours`, 'Annuler', () => save(key, {st:prev})); }
 }
 
 /* ---------- data store: Firebase, or a stand-in for tests ---------- */
@@ -310,7 +331,7 @@ function addFrom(key, st){
 // marking a show as seen ticks every episode already out
 function doneFill(key){
   const d = dcache[key]; if (!d || d.kind!=='tv') return {finished:Date.now()};
-  const w = {}; d.seasons.forEach(s => { w[s.n] = airedIn(d, s.n) || s.eps; });
+  const e = entries.get(key), w = {...((e&&e.w)||{})}; liveSeasons(d, e).forEach(s => { w[s.n] = airedIn(d, s.n) || s.eps; });
   return {w, finished:Date.now()};
 }
 function setStatus(key, st){
@@ -327,9 +348,7 @@ function setEp(key, n, val){
   const patch = {w};
   // the status follows the ticks: something seen -> En cours, everything out seen -> Vu (unless an episode is coming soon)
   if (e.st!=='dropped'){
-    const allOut = d.seasons.every(x => (w[x.n]||0) >= airedIn(d, x.n)) && d.seasons.some(x => airedIn(d, x.n) > 0);
-    const any = Object.entries(w).some(([k2,v]) => +k2>0 && v>0);
-    const want = allOut && !d.next ? 'done' : any ? 'watching' : e.st;
+    const want = statusFor(d, e, w);
     if (want!==e.st){
       patch.st = want;
       if (want==='done') patch.finished = Date.now(); else if (want==='watching' && !e.started) patch.started = Date.now();
@@ -426,7 +445,7 @@ function subOf(m, e){
   if (!m) return '';
   if (m.kind==='movie') return ['Film', m.yr].filter(Boolean).join(', ');
   const d = dcache[e ? keyOfEntry(e) : ''];
-  if (e && e.st==='done' && d && airedTotal(d) > watchedTotal(e)) return '';
+  if (e && e.st==='done' && d && d.kind==='tv' && airedTotal(d, e) > seenTotal(d, e)) return '';
   return ['Série', m.yr, m.ns ? plural(m.ns, 'saison', 'saisons') : ''].filter(Boolean).join(', ');
 }
 const keyOfEntry = e => `${e.kind}-${e.tid}`;
@@ -437,7 +456,7 @@ function posterCard(key, m, opts={}){
   const heart = opts.heart ? `<span class="heart" aria-label="Recommandé">${ICON.heart}</span>` : '';
   const add = opts.discover && !e ? `<button class="add" type="button" data-add="${key}" aria-label="Ajouter ${esc(m.t)} à regarder">${ICON.plus}</button>` : '';
   const d = dcache[key];
-  const newS = !opts.discover && !opts.friend && e && e.st==='done' && d && d.kind==='tv' && airedTotal(d) > watchedTotal(e) ? `<span class="s newseason">Nouveaux épisodes dispo</span>` : '';
+  const newS = !opts.discover && !opts.friend && e && e.st==='done' && d && d.kind==='tv' && airedTotal(d, e) > seenTotal(d, e) ? `<span class="s newseason">Nouveaux épisodes dispo</span>` : '';
   return `<div style="position:relative">
     <button class="poster" type="button" data-open="${key}">
       <div class="cover">${m.poster?`<img src="${esc(IMG(m.poster))}" alt="" loading="lazy" decoding="async">`:''}${flag}${score}${heart}${opts.cnt?`<span class="cnt">${esc(opts.cnt)}</span>`:''}</div>
@@ -473,8 +492,10 @@ function watchRow(key, e){
     <div class="finish"><button class="btn small primary" type="button" data-st="${key}|done">${ICON.check} Je l’ai vu</button></div></div></article>`;
   const n = currentSeason(d, e), s = d.seasons.find(x => x.n===n) || {eps:0, name:''};
   const w = (e.w||{})[n]||0, aired = airedIn(d, n);
-  const behind = airedTotal(d) - watchedTotal(e);
-  const allDone = d.seasons.every(x => ((e.w||{})[x.n]||0) >= airedIn(d, x.n));
+  const behind = airedTotal(d, e) - seenTotal(d, e);
+  const allDone = statusFor(d, e, e.w||{})==='done';
+  const lastSeen = Math.max(0, ...d.seasons.filter(x => ((e.w||{})[x.n]||0) > 0).map(x => x.n));
+  const canStop = d.seasons.some(x => x.n > lastSeen && !skipped(e, x.n)) && lastSeen>0;
   return `<article class="row">${cover}
     <div style="min-width:0">
       <h3 data-open="${key}" tabindex="0" role="button">${esc(d.t)}</h3>
@@ -482,7 +503,8 @@ function watchRow(key, e){
       <div class="prog"><span class="count num"><b>${w}</b> / ${s.eps||'?'}</span>
         <button class="plus" type="button" data-plus="${key}" ${w>=aired?'disabled':''}>+1 épisode</button></div>
       ${pipsFor(key, d, e, n)}
-
+      ${allDone ? `<div class="finish">Tout vu ! <button class="btn small primary" type="button" data-st="${key}|done">${ICON.check} Ranger dans Vus</button></div>`
+        : canStop ? `<div class="finish"><button class="link-inline" type="button" data-stop="${key}|${lastSeen}">Je m’arrête là (après la saison ${lastSeen})</button></div>` : ''}
     </div></article>`;
 }
 function myFiltered(st){
@@ -550,13 +572,13 @@ function newsItems(){
   for (const [k,e] of entries){
     if (e.st!=='done' || e.kind!=='tv') continue;
     const d = dcache[k]; if (!d) continue;
-    const aired = airedTotal(d), watched = watchedTotal(e), fresh = aired - watched;
+    const aired = airedTotal(d, e), watched = seenTotal(d, e), fresh = aired - watched;
     if (fresh > 0 && aired > (e.newAck||0)){
-      const s = d.seasons.find(x => ((e.w||{})[x.n]||0) < airedIn(d, x.n));
+      const s = liveSeasons(d, e).find(x => ((e.w||{})[x.n]||0) < airedIn(d, x.n));
       out.push({k, e, d, kind:'new', fresh, season:s, airing: !!(d.next && s && d.next.s===s.n)});
       continue;
     }
-    const soon = d.seasons.find(x => x.air && x.air > today() && ((e.w||{})[x.n]||0)===0);
+    const soon = liveSeasons(d, e).find(x => x.air && x.air > today() && ((e.w||{})[x.n]||0)===0);
     if (soon && e.ackSoon!==soon.n) out.push({k, e, d, kind:'soon', season:soon});
   }
   return out.sort((a,b) => (a.kind==='new'?0:1)-(b.kind==='new'?0:1));
@@ -968,7 +990,7 @@ function applyPick(){
     const full = s.n===0 ? s.eps : (airedIn(d, s.n) || s.eps);
     if (sel.has(s.n)) w[s.n] = full; else if ((w[s.n]||0) >= s.eps) w[s.n] = 0;
   }
-  const allSeen = d.seasons.every(s => sel.has(s.n) || airedIn(d, s.n)===0);
+  const allSeen = liveSeasons(d, e).every(s => sel.has(s.n) || airedIn(d, s.n)===0);
   const st = allSeen && sel.size ? 'done' : sel.size ? 'watching' : (e ? e.st : 'plan');
   if (!e) addFrom(key, 'plan');
   const patch = {w, st};
@@ -1019,6 +1041,12 @@ function seasonsBlock(key, d, e){
       const sub = [e && w && !full ? `${w} sur ${s.eps} vus` : plural(s.eps,'épisode','épisodes'), s.air ? (s.air > today() ? `sortie ${fmtDay(s.air)}` : s.air.slice(0,4)) : '', aired<s.eps && aired>0 ? `${aired} sortis` : ''].filter(Boolean).join(', ');
       const mark = aired===0 && !full ? `<span class="s-mark off">Pas encore sortie</span>`
         : `<button class="s-mark${full?' on':''}" type="button" data-sall="${key}|${s.n}|${full?0:Math.max(aired,0)}" aria-pressed="${full}" aria-label="${full?'Décocher':'Marquer comme vue'} : ${esc(seasonLabel(s))}">${full?`${ICON.check} Vue`:'Marquer vue'}</button>`;
+      const sk = e && skipped(e, s.n);
+      if (sk) return `<div class="season skipped"><div class="season-hd">
+          <span class="fam-open" style="cursor:default"><span class="thumb">${s.poster?`<img src="${esc(IMG(s.poster,'w92'))}" alt="" loading="lazy">`:''}</span>
+          <span style="min-width:0"><span class="ft">${esc(seasonLabel(s))}</span><span class="fs">Ignorée : tu ne comptes pas la regarder</span></span></span>
+          <button class="s-mark" type="button" data-unskip="${key}|${s.n}">Réactiver</button></div></div>`;
+      const ignoreBtn = e && s.n>0 && !full ? `<button class="s-skip" type="button" data-skip="${key}|${s.n}" title="Je ne compte pas la regarder">Ignorer</button>` : '';
       return `<div class="season${open?' open':''}${full?' seen':''}">
         <div class="season-hd">
           <button class="fam-open" type="button" data-season="${s.n}" aria-expanded="${open}" title="Voir les épisodes">
@@ -1026,7 +1054,7 @@ function seasonsBlock(key, d, e){
             <span style="min-width:0"><span class="ft">${esc(seasonLabel(s))}</span><span class="fs">${esc(sub)}</span>
               ${e && w && !full ? `<span class="s-bar"><i style="width:${Math.round(w/(s.eps||1)*100)}%"></i></span>` : ''}</span>
           </button>
-          ${mark}
+          <span class="s-acts">${mark}${ignoreBtn}</span>
         </div>
         ${open ? (e ? pipsFor(key, d, e, s.n) : `<p class="note" style="padding:0 12px 12px">Coche « Marquer vue », ou ajoute l’anime à ta liste pour cocher épisode par épisode.</p>`) : ''}
       </div>`; })(); }).join('')}</div>
@@ -1334,9 +1362,15 @@ document.addEventListener('click', async ev => {
   if (d.sall){ const [key, n, v] = d.sall.split('|'), dd = dcache[key];
     if (!entries.has(key)){ if (dd && dd.seasons.length<=1 && +n>0){ setStatus(key, 'done'); return; } addFrom(key, 'watching'); }
     setEp(key, +n, +v); return; }
+  if (d.skip){ const [k, n] = d.skip.split('|'); const x = entries.get(k); if (x){ reconcile(k, {skip:[...new Set([...(x.skip||[]), +n])]}); toast(`Saison ${n} ignorée`); } return; }
+  if (d.unskip){ const [k, n] = d.unskip.split('|'), dd = dcache[k]; const x = entries.get(k); if (!x || !dd) return;
+    let skip = (x.skip||[]).filter(v => v!==+n), stop = x.stop;
+    if (stop!=null && +n > stop){ skip = [...new Set([...skip, ...dd.seasons.filter(v => v.n > stop && v.n!==+n).map(v => v.n)])]; stop = null; }
+    reconcile(k, {skip, stop: stop==null ? null : stop}); return; }
+  if (d.stop){ const [k, n] = d.stop.split('|'); const x = entries.get(k); if (x){ const prevStop = x.stop ?? null; reconcile(k, {stop:+n}); setTimeout(() => toast(`Tu t’arrêtes après la saison ${n} : les suivantes sont ignorées`, 'Annuler', () => reconcile(k, {stop:prevStop})), 50); } return; }
   if (d.resume){ const x = entries.get(d.resume); if (x){ save(d.resume, {st:'watching', started:Date.now()}); toast(`${x.m?x.m.t:'Anime'} est dans En cours`); } return; }
   if (d.later){ const x = entries.get(d.later), dd = dcache[d.later]; if (x && dd){ const soon = dd.seasons.find(s => s.air && s.air > today() && ((x.w||{})[s.n]||0)===0);
-      save(d.later, airedTotal(dd) > watchedTotal(x) ? {newAck:airedTotal(dd)} : {ackSoon: soon ? soon.n : 0}); } return; }
+      save(d.later, airedTotal(dd, x) > seenTotal(dd, x) ? {newAck:airedTotal(dd, x)} : {ackSoon: soon ? soon.n : 0}); } return; }
   if (d.fmark){ const [fk, st] = d.fmark.split('|'); if (st==='plan' && entries.get(fk)) save(fk, {st:'plan'}); else setStatus(fk, st); return; }
   if (d.films){ allFilms.has(d.films) ? allFilms.delete(d.films) : allFilms.add(d.films); renderSheet(); return; }
   if (d.specials!==undefined){ showSpecials = !showSpecials; renderSheet(); return; }
