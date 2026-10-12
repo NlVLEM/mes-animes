@@ -250,3 +250,10 @@ textarea{width:100%;min-height:72px;border:1px solid var(--line);background:var(
 .toggle-sm{font-size:13px;padding:6px 12px}
 .sheet .shelf{grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:16px 10px}
 @media (max-width:520px){.sheet .shelf{grid-template-columns:repeat(3,minmax(0,1fr))}}
+/* long titles never widen the sheet */
+.sheet{overflow-x:hidden}
+.sh-body{grid-template-columns:minmax(0,1fr)}
+.sh-body > *{min-width:0}
+.fam-open > span:last-child{flex:1;min-width:0}
+.ft{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.facts .fact{max-width:100%;overflow-wrap:anywhere}
