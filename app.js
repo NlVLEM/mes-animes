@@ -1022,7 +1022,7 @@ function profileEditor(){
 }
 function saveProfileField(patch, msg){
   Object.assign(profile, patch);
-  Store.setProfile(me.uid, {pseudo:profile.pseudo, ...patch}).then(() => msg && toast(msg)).catch(() => toast('Pas enregistré, réessaie.'));
+  Store.setProfile(me.uid, {pseudo:profile.pseudo, ...patch}).then(() => msg && toast(msg)).catch(e => toast(String(e&&e.code||'').includes('permission-denied') ? 'La base refuse la modification : colle les nouvelles règles Firestore puis réessaie.' : 'Pas enregistré, réessaie.'));
 }
 function openSettings(){ lastFocus = document.activeElement; sheetId = 'settings'; showSheet(); $('#sheet').classList.remove('page'); renderSettings(); $('#sheet .sh-close').focus();
   const missing = (profile.followers||[]).filter(uid => !pseudoCache.has(uid));
@@ -1150,7 +1150,11 @@ document.addEventListener('change', async ev => {
       saveProfileField({banner:'custom'}, 'Bannière enregistrée');
     }
     render(); renderFriend(me.uid);
-  }catch(e){ toast(e && !e.code && e.message ? e.message : 'Pas enregistré, réessaie.'); }
+  }catch(e){
+    const code = e && e.code ? String(e.code) : '';
+    toast(code.includes('permission-denied') ? 'La base refuse l’image : colle les nouvelles règles Firestore (fichier firestore.rules) puis réessaie.'
+      : code ? 'Pas enregistré : vérifie ta connexion et réessaie.' : (e && e.message) || 'Pas enregistré, réessaie.');
+  }
 });
 document.addEventListener('submit', ev => {
   const cf = ev.target.closest && ev.target.closest('[data-cform]');
