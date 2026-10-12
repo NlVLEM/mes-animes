@@ -159,7 +159,7 @@ function normMovie(x){
 // search / discover rows
 function normHit(x, kind){
   kind = kind || x.media_type;
-  return {key:`${kind}-${x.id}`, kind, id:x.id, t:kind==='tv'?x.name:x.title, ot:kind==='tv'?x.original_name:x.original_title, poster:x.poster_path,
+  return {vc:x.vote_count||0, lang:x.original_language||'', ot2:x.original_title||'', key:`${kind}-${x.id}`, kind, id:x.id, t:kind==='tv'?x.name:x.title, ot:kind==='tv'?x.original_name:x.original_title, poster:x.poster_path,
     yr:((kind==='tv'?x.first_air_date:x.release_date)||'').slice(0,4), date:(kind==='tv'?x.first_air_date:x.release_date)||'',
     anime:(x.genre_ids||[]).includes(16) && (x.original_language==='ja' || (x.origin_country||[]).includes('JP')), pop:x.popularity||0};
 }
@@ -324,10 +324,20 @@ function setEp(key, n, val){
   const e = entries.get(key), d = dcache[key]; if (!e || !d) return;
   const s = d.seasons.find(x => x.n===n) || (n===0 && d.specials); const cap = s ? s.eps : val;
   const w = {...(e.w||{})}; w[n] = Math.max(0, Math.min(cap, val));
-  const patch = {w}; if (e.st==='plan' && w[n]>0){ patch.st = 'watching'; patch.started = Date.now(); }
+  const patch = {w};
+  // the status follows the ticks: something seen -> En cours, everything out seen -> Vu (unless an episode is coming soon)
+  if (e.st!=='dropped'){
+    const allOut = d.seasons.every(x => (w[x.n]||0) >= airedIn(d, x.n)) && d.seasons.some(x => airedIn(d, x.n) > 0);
+    const any = Object.entries(w).some(([k2,v]) => +k2>0 && v>0);
+    const want = allOut && !d.next ? 'done' : any ? 'watching' : e.st;
+    if (want!==e.st){
+      patch.st = want;
+      if (want==='done') patch.finished = Date.now(); else if (want==='watching' && !e.started) patch.started = Date.now();
+      const prev = e.st;
+      setTimeout(() => toast(want==='done' ? `Tout vu : ${d.t} est rangé dans Vus` : `${d.t} est dans En cours`, 'Annuler', () => save(key, {st:prev})), 0);
+    }
+  }
   save(key, patch);
-  if (patch.st!=='done' && d.status!=='Returning Series' && d.seasons.every(x => (w[x.n]||0) >= x.eps) && e.st!=='done')
-    toast(`Tu as fini ${d.t} !`, 'Ranger dans Vus', () => setStatus(key, 'done'));
 }
 function plusOne(key){
   const e = entries.get(key), d = dcache[key]; if (!e || !d) return;
@@ -472,7 +482,7 @@ function watchRow(key, e){
       <div class="prog"><span class="count num"><b>${w}</b> / ${s.eps||'?'}</span>
         <button class="plus" type="button" data-plus="${key}" ${w>=aired?'disabled':''}>+1 épisode</button></div>
       ${pipsFor(key, d, e, n)}
-      ${allDone && d.status!=='Returning Series' ? `<div class="finish">Série terminée. <button class="btn small primary" type="button" data-st="${key}|done">${ICON.check} Ranger dans Vus</button></div>` : ''}
+
     </div></article>`;
 }
 function myFiltered(st){
@@ -880,7 +890,9 @@ async function loadRelated(key){
       const names = [...new Set([base(d.t), base(d.ot)].filter(s => s.length>=3))];
       const res = await Promise.all(names.map(nm => tmdb('/search/movie', {query:nm, include_adult:false}).catch(()=>({results:[]}))));
       const seen = new Set();
-      list = res.flatMap(r => r.results||[]).filter(x => (x.genre_ids||[]).includes(16) && !seen.has(x.id) && seen.add(x.id))
+      const firstYr = +(d.yr||0);
+      list = res.flatMap(r => r.results||[]).filter(x => (x.genre_ids||[]).includes(16) && x.original_language==='ja' && !seen.has(x.id) && seen.add(x.id))
+        .filter(x => !firstYr || !x.release_date || +x.release_date.slice(0,4) >= firstYr - 1)
         .filter(x => names.some(nm => String(x.title||'').toLowerCase().includes(nm) || String(x.original_title||'').toLowerCase().includes(nm)))
         .map(x => normHit(x,'movie'));
     }
@@ -1001,7 +1013,7 @@ function seasonsBlock(key, d, e){
         <span style="min-width:0"><span class="ft"><span class="kind">Film</span> ${esc(short)}</span><span class="fs">${h.yr||'Date inconnue'}${where?`, ${where}`:''}</span></span>
       </button><span class="fa">${mark}</span></div></div>`;
   };
-  return `<div class="block"><h3>${fl.list.length ? 'Saisons et films' : 'Saisons'}${d.seasons.length?` <span class="note" style="display:inline">(${plural(d.seasons.length,'saison','saisons')}${fl.list.length?`, ${plural(fl.list.length,'film','films')}`:''})</span>`:''}</h3>
+  return `<div class="block"><h3>${fl.main.length ? 'Saisons et films' : 'Saisons'}${d.seasons.length?` <span class="note" style="display:inline">(${plural(d.seasons.length,'saison','saisons')}${fl.main.length?`, ${plural(fl.main.length,'film','films')}`:''})</span>`:''}</h3>
     <div class="seasons">${items.map((it, i) => { if (it.f) return filmRow(it.f, i); const s = it.s; return (() => {
       const w = e ? ((e.w||{})[s.n]||0) : 0, aired = s.n===0 ? s.eps : airedIn(d, s.n), full = w>=s.eps && s.eps>0, open = openSeason===s.n;
       const sub = [e && w && !full ? `${w} sur ${s.eps} vus` : plural(s.eps,'épisode','épisodes'), s.air ? (s.air > today() ? `sortie ${fmtDay(s.air)}` : s.air.slice(0,4)) : '', aired<s.eps && aired>0 ? `${aired} sortis` : ''].filter(Boolean).join(', ');
@@ -1018,18 +1030,22 @@ function seasonsBlock(key, d, e){
         </div>
         ${open ? (e ? pipsFor(key, d, e, s.n) : `<p class="note" style="padding:0 12px 12px">Coche « Marquer vue », ou ajoute l’anime à ta liste pour cocher épisode par épisode.</p>`) : ''}
       </div>`; })(); }).join('')}</div>
-    ${fl.hidden ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Voir les ${fl.hidden} autres films (récaps, éditions spéciales…)</button>` : fl.list.length>3 ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Afficher moins de films</button>` : ''}
+    ${fl.hidden ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Autres (${fl.hidden}) : compilations, récaps, éditions spéciales…</button>` : fl.open && fl.list.length>fl.main.length ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Masquer les autres</button>` : ''}
     <p class="note" style="margin-top:6px">Rangés par date de sortie. Touche une saison pour cocher ses épisodes un par un.${hasSp ? ` <button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Afficher les épisodes spéciaux (${d.specials.eps})`}</button>` : ''}</p></div>`;
 }
 /* films: only the best-known three by default (in release order), the rest folded behind a link */
 const allFilms = new Set();
+// compilations of episodes shown in cinemas, recaps, making-of, concerts: not real films of the story
+const EXTRA = /world ?tour|compilation|compil|r[ée]cap|digest|special edition|[ée]dition sp[ée]ciale|making|behind the|concert|\blive\b|stage|event|projection|\bto the\b|en route vers|総集編|特別編|ワールドツアー|上映|ライブ/i;
+const isExtra = h => EXTRA.test(h.t||'') || EXTRA.test(h.ot2||'') || (h.vc<3 && (h.pop||0)<1.5);
 function filmsFor(key){
   const seen = new Set([key]);
-  const list = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => h.kind==='movie' && !seen.has(h.key) && seen.add(h.key));
-  const ranked = [...list].sort((a,b) => (entries.has(b.key)-entries.has(a.key)) || ((b.pop||0)-(a.pop||0)) || ((b.poster?1:0)-(a.poster?1:0)));
-  const open = allFilms.has(key) || list.length<=3;
-  const shown = open ? list : ranked.slice(0, 3);
-  return {list, shown, hidden:list.length - shown.length, open};
+  const all = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => h.kind==='movie' && (!h.lang || h.lang==='ja') && !seen.has(h.key) && seen.add(h.key));
+  const main = all.filter(h => entries.has(h.key) || !isExtra(h)), extras = all.filter(h => !entries.has(h.key) && isExtra(h));
+  const ranked = [...main].sort((a,b) => (entries.has(b.key)-entries.has(a.key)) || ((b.pop||0)-(a.pop||0)) || ((b.poster?1:0)-(a.poster?1:0)));
+  const open = allFilms.has(key);
+  const shown = open ? [...main, ...extras] : (main.length<=3 ? main : ranked.slice(0, 3));
+  return {list:all, main, extras, shown, hidden:all.length - shown.length, open};
 }
 function relatedBlock(key, d){
   if (d.kind==='tv') return '';   // a show's films sit in its seasons timeline
