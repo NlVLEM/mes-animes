@@ -1,6 +1,6 @@
-// Offline shell: the page opens without network; AniList and GitHub calls always go to the network.
-const SHELL = 'mes-animes-v2', IMG = 'mes-animes-img';
-const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
+// Offline shell: the page opens without network; TMDB and Firebase calls always go to the network.
+const SHELL = 'mes-animes-v3', IMG = 'mes-animes-img';
+const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'firebase.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== SHELL && k !== IMG).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
@@ -9,7 +9,7 @@ self.addEventListener('fetch', e => {
   if (url.origin === location.origin) {
     // network first so updates show up at once, cache when offline
     e.respondWith(fetch(req).then(r => { if (r.ok) caches.open(SHELL).then(c => c.put(req, r.clone())); return r; }).catch(() => caches.match(req).then(r => r || caches.match('index.html'))));
-  } else if (/(^|\.)anili\.st$|anilist\.co$/.test(url.hostname) && req.destination === 'image') {
+  } else if (url.hostname === 'image.tmdb.org') {
     // posters: cache first, they never change
     e.respondWith(caches.open(IMG).then(c => c.match(req).then(hit => hit || fetch(req).then(r => { c.put(req, r.clone()); return r; }))));
   }

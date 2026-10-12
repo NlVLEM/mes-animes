@@ -1,0 +1,35 @@
+rules_version = '2';
+// Règles de sécurité de la base Mes Animes.
+// - Seules les personnes connectées au site peuvent lire les profils et les listes (c'est ce qui permet de voir ses amis).
+// - Chacun ne peut modifier que son propre profil et sa propre liste.
+// - Un pseudo n'appartient qu'à une seule personne.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /pseudos/{p} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && p.matches('^[a-z0-9_.-]{3,20}$')
+        && request.resource.data.keys().hasOnly(['uid', 'pseudo'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.pseudo.lower() == p;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
+    match /users/{uid} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['pseudo', 'platforms', 'following', 'updated'])
+        && request.resource.data.pseudo is string
+        && getAfter(/databases/$(database)/documents/pseudos/$(request.resource.data.pseudo.lower())).data.uid == uid
+        && (!('following' in request.resource.data) || (request.resource.data.following is list && request.resource.data.following.size() <= 200))
+        && (!('platforms' in request.resource.data) || (request.resource.data.platforms is list && request.resource.data.platforms.size() <= 20));
+      allow delete: if request.auth != null && request.auth.uid == uid;
+
+      match /list/{item} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null && request.auth.uid == uid && item.matches('^(tv|movie)-[0-9]{1,12}$');
+      }
+    }
+  }
+}
