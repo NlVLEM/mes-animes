@@ -404,3 +404,31 @@ button.pf-count[aria-expanded="true"]{border-color:var(--accent);background:var(
 .pf-people .res{background:var(--bg)}
 .pf-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}
 @media (min-width:760px){.pf-about,.pf-people{margin-left:24px;margin-right:24px}}
+/* seasons: bigger rows and a clear seen button */
+.season-hd{gap:10px;padding-right:10px}
+.season-hd .fam-open{padding:8px}
+.season .thumb{width:44px;height:64px;border-radius:8px}
+.season .ft{font-size:15px}
+.season.seen .ft::after{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--avail);margin-left:8px;vertical-align:middle}
+.s-bar{display:block;height:5px;border-radius:999px;background:var(--pip-off);margin-top:6px;overflow:hidden;max-width:220px}
+.s-bar i{display:block;height:100%;background:var(--accent);border-radius:999px}
+.s-mark{flex:none;min-height:40px;padding:0 14px;border-radius:999px;border:1.5px solid var(--line);background:var(--surface);font-weight:700;font-size:14px;display:inline-flex;align-items:center;gap:6px;color:var(--ink);white-space:nowrap}
+.s-mark svg{width:16px;height:16px}
+.s-mark:hover{border-color:var(--avail)}
+.s-mark.on{background:var(--avail);border-color:var(--avail);color:#fff}
+.s-mark.off{border-style:dashed;color:var(--ink-3);font-weight:500;font-size:13px}
+@media (max-width:420px){.s-mark{padding:0 11px;font-size:13px}.season .thumb{width:38px;height:56px}}
+.sheet.page .seasons{grid-template-columns:minmax(0,1fr)}
+@media (min-width:1000px){.sheet.page .seasons{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* "which seasons did you see?" */
+.picker{background:var(--surface);border:1.5px solid var(--accent);border-radius:16px;padding:16px}
+.pick-list{display:grid;gap:6px}
+.pick-row{all:unset;cursor:pointer;display:flex;align-items:center;gap:12px;padding:8px 10px;border-radius:12px;border:1px solid var(--line);background:var(--bg)}
+.pick-row:focus-visible{outline:2px solid var(--accent)}
+.pick-row[aria-pressed="true"]{border-color:var(--avail);background:var(--avail-soft)}
+.pick-row:disabled{opacity:.5;cursor:default}
+.pick-row .thumb{width:36px;height:52px;border-radius:6px}
+.pick-row .box{width:26px;height:26px;border-radius:8px;border:2px solid var(--line);display:grid;place-items:center;flex:none;background:var(--surface)}
+.pick-row[aria-pressed="true"] .box{background:var(--avail);border-color:var(--avail);color:#fff}
+.pick-row .box svg{width:16px;height:16px}
+.pick-foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;margin-top:12px}

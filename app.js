@@ -800,7 +800,7 @@ const isPageKey = k => isAnimeKey(k) || String(k||'').startsWith('friend:');
 const urlOf = k => isAnimeKey(k) ? '#/'+k : '#/u/'+String(k).slice(7);
 let pushedPage = false, pageReturn = null;
 async function openSheet(key, fromUrl){
-  if (sheetId!==key) openSeason = null;
+  if (sheetId!==key){ openSeason = null; pick = null; }
   if (!isPageKey(sheetId)) { lastFocus = document.activeElement; pageReturn = window.scrollY; }
   if (!fromUrl && location.hash!==urlOf(key)){ history.pushState({page:key}, '', urlOf(key)); pushedPage = true; }
   sheetId = key; showSheet(); $('#sheet').classList.add('page'); $('#sheet').scrollTop = 0;
@@ -906,27 +906,67 @@ function renderSheet(){
     </div></div>`;
   $('#sheet').scrollTop = keepScroll;
 }
+/* seasons: big rows with a clear "Marquer vue" button; "Déjà vu" first asks which seasons were seen */
+let pick = null;   // {key, sel:Set of season numbers} while choosing seen seasons
+const seasonLabel = s => s.n===0 ? 'Épisodes spéciaux' : (s.name && !/^saison\s*\d+$/i.test(s.name) ? `Saison ${s.n} : ${s.name}` : `Saison ${s.n}`);
+function startPick(key){
+  const d = dcache[key], e = entries.get(key); if (!d) return;
+  const sel = new Set(d.seasons.filter(s => airedIn(d, s.n) > 0 && (!e || ((e.w||{})[s.n]||0) >= 0)).map(s => s.n));
+  pick = {key, sel}; renderSheet();
+  const el = document.getElementById('picker'); el && el.scrollIntoView({block:'start', behavior:'smooth'});
+}
+function applyPick(){
+  const {key, sel} = pick, d = dcache[key]; let e = entries.get(key); if (!d){ pick = null; return; }
+  const all = [...d.seasons, ...(d.specials && d.specials.eps ? [d.specials] : [])];
+  const w = {...((e && e.w)||{})};
+  for (const s of all){
+    const full = s.n===0 ? s.eps : (airedIn(d, s.n) || s.eps);
+    if (sel.has(s.n)) w[s.n] = full; else if ((w[s.n]||0) >= s.eps) w[s.n] = 0;
+  }
+  const allSeen = d.seasons.every(s => sel.has(s.n) || airedIn(d, s.n)===0);
+  const st = allSeen && sel.size ? 'done' : sel.size ? 'watching' : (e ? e.st : 'plan');
+  if (!e) addFrom(key, 'plan');
+  const patch = {w, st};
+  if (st==='done' && (!e || e.st!=='done')) patch.finished = Date.now();
+  if (st==='watching' && (!e || e.st!=='watching')) patch.started = Date.now();
+  pick = null; save(key, patch);
+  toast(st==='done' ? 'Rangé dans Vus. Pense à le noter !' : sel.size ? `${plural(sel.size,'saison cochée','saisons cochées')}, rangé dans En cours` : 'Rien de coché');
+}
 function seasonsBlock(key, d, e){
   const all = [...d.seasons, ...(d.specials && d.specials.eps ? [d.specials] : [])];
   if (!all.length) return '';
+  if (pick && pick.key===key){
+    return `<div class="block picker" id="picker"><h3>Quelles saisons as-tu vues ?</h3>
+      <p class="note" style="margin:-2px 0 10px">Décoche celles que tu n’as pas encore vues, puis valide.</p>
+      <div class="pick-list">${all.map(s => {
+        const aired = s.n===0 ? s.eps : airedIn(d, s.n), on = pick.sel.has(s.n);
+        return `<button class="pick-row" type="button" data-picks="${s.n}" aria-pressed="${on}" ${aired===0?'disabled':''}>
+          <span class="box" aria-hidden="true">${on?ICON.check:''}</span>
+          <span class="thumb">${s.poster?`<img src="${esc(IMG(s.poster,'w92'))}" alt="" loading="lazy">`:''}</span>
+          <span style="min-width:0"><span class="ft">${esc(seasonLabel(s))}</span><span class="fs">${aired===0 ? 'Pas encore sortie' : `${plural(s.eps,'épisode','épisodes')}${s.air?', '+s.air.slice(0,4):''}`}</span></span></button>`;
+      }).join('')}</div>
+      <div class="pick-foot"><span class="links"><button class="btn small" type="button" data-pick="all">Tout cocher</button><button class="btn small" type="button" data-pick="none">Tout décocher</button></span>
+        <span class="links"><button class="btn" type="button" data-pick="cancel">Annuler</button><button class="btn primary" type="button" data-pick="ok">${ICON.check} Valider</button></span></div></div>`;
+  }
   return `<div class="block"><h3>Saisons${d.seasons.length?` <span class="note" style="display:inline">(${plural(d.seasons.length,'saison','saisons')}, ${d.total} épisodes)</span>`:''}</h3>
     <div class="seasons">${all.map(s => {
-      const w = e ? ((e.w||{})[s.n]||0) : 0, aired = s.n===0 ? s.eps : airedIn(d, s.n), full = e && w>=s.eps && s.eps>0, open = openSeason===s.n;
-      const label = s.n===0 ? 'Épisodes spéciaux' : (s.name && !/^saison\s*\d+$/i.test(s.name) ? `Saison ${s.n} : ${s.name}` : `Saison ${s.n}`);
-      const sub = [plural(s.eps,'épisode','épisodes'), s.air ? (s.air > today() ? `sortie ${fmtDay(s.air)}` : s.air.slice(0,4)) : '', aired<s.eps && aired>0 ? `${aired} sortis` : ''].filter(Boolean).join(', ');
-      return `<div class="season${open?' open':''}">
+      const w = e ? ((e.w||{})[s.n]||0) : 0, aired = s.n===0 ? s.eps : airedIn(d, s.n), full = w>=s.eps && s.eps>0, open = openSeason===s.n;
+      const sub = [e && w && !full ? `${w} sur ${s.eps} vus` : plural(s.eps,'épisode','épisodes'), s.air ? (s.air > today() ? `sortie ${fmtDay(s.air)}` : s.air.slice(0,4)) : '', aired<s.eps && aired>0 ? `${aired} sortis` : ''].filter(Boolean).join(', ');
+      const mark = aired===0 && !full ? `<span class="s-mark off">Pas encore sortie</span>`
+        : `<button class="s-mark${full?' on':''}" type="button" data-sall="${key}|${s.n}|${full?0:Math.max(aired,0)}" aria-pressed="${full}" aria-label="${full?'Décocher':'Marquer comme vue'} : ${esc(seasonLabel(s))}">${full?`${ICON.check} Vue`:'Marquer vue'}</button>`;
+      return `<div class="season${open?' open':''}${full?' seen':''}">
         <div class="season-hd">
-          <button class="fam-open" type="button" data-season="${s.n}" aria-expanded="${open}">
+          <button class="fam-open" type="button" data-season="${s.n}" aria-expanded="${open}" title="Voir les épisodes">
             <span class="thumb">${s.poster?`<img src="${esc(IMG(s.poster,'w92'))}" alt="" loading="lazy">`:''}</span>
-            <span style="min-width:0"><span class="ft">${esc(label)}</span><span class="fs">${esc(sub)}</span></span>
+            <span style="min-width:0"><span class="ft">${esc(seasonLabel(s))}</span><span class="fs">${esc(sub)}</span>
+              ${e && w && !full ? `<span class="s-bar"><i style="width:${Math.round(w/(s.eps||1)*100)}%"></i></span>` : ''}</span>
           </button>
-          ${e ? `<span class="pv${full?' full':''} num">${w}/${s.eps}</span>
-            <button class="mini${full?' on':''}" type="button" data-sall="${key}|${s.n}|${full?0:Math.max(aired,0)}" aria-label="${full?'Décocher':'Marquer comme vue'} : ${esc(label)}" ${!full&&aired===0?'disabled':''}>${ICON.check}</button>` : ''}
+          ${mark}
         </div>
-        ${open && e ? pipsFor(key, d, e, s.n) : ''}
-        ${open && !e ? `<p class="note" style="padding:0 10px 10px">Ajoute l’anime à ta liste pour cocher les épisodes.</p>` : ''}
+        ${open ? (e ? pipsFor(key, d, e, s.n) : `<p class="note" style="padding:0 12px 12px">Coche « Marquer vue », ou ajoute l’anime à ta liste pour cocher épisode par épisode.</p>`) : ''}
       </div>`;
-    }).join('')}</div></div>`;
+    }).join('')}</div>
+    <p class="note" style="margin-top:6px">Touche une saison pour cocher ses épisodes un par un.</p></div>`;
 }
 function relatedBlock(key, d){
   const seen = new Set([key]);
@@ -1205,9 +1245,20 @@ document.addEventListener('click', async ev => {
   if (d.unfollow){ unfollow(d.unfollow); return; }
   if (d.ep){ const [key, n, i] = d.ep.split('|'); const e = entries.get(key); const cur = e ? ((e.w||{})[+n]||0) : 0; setEp(key, +n, cur===+i ? +i-1 : +i); return; }
   if (d.plus){ plusOne(d.plus); return; }
-  if (d.sall){ const [key, n, v] = d.sall.split('|'); setEp(key, +n, +v); return; }
+  if (d.sall){ const [key, n, v] = d.sall.split('|'), dd = dcache[key];
+    if (!entries.has(key)){ if (dd && dd.seasons.length<=1 && +n>0){ setStatus(key, 'done'); return; } addFrom(key, 'watching'); }
+    setEp(key, +n, +v); return; }
+  if (d.picks!==undefined){ const n = +d.picks; pick.sel.has(n) ? pick.sel.delete(n) : pick.sel.add(n); renderSheet(); return; }
+  if (d.pick){ const dd = pick && dcache[pick.key];
+    if (d.pick==='ok') applyPick();
+    else if (d.pick==='cancel'){ pick = null; renderSheet(); }
+    else if (dd){ pick.sel = d.pick==='all' ? new Set([...dd.seasons.filter(x => airedIn(dd, x.n)>0).map(x => x.n), ...(dd.specials&&dd.specials.eps?[0]:[])]) : new Set(); renderSheet(); }
+    return; }
   if (d.season!==undefined){ openSeason = openSeason===+d.season ? null : +d.season; renderSheet(); return; }
-  if (d.st){ const [key, st] = d.st.split('|'); setStatus(key, st); if (st==='done' && ui.tab==='watching' && sheetId==null) toast('Rangé dans Vus. Pense à le noter !', 'Noter', () => openSheet(key)); return; }
+  if (d.st){ const [key, st] = d.st.split('|');
+    const dd = dcache[key], ee = entries.get(key);
+    if (st==='done' && sheetId===key && dd && dd.kind==='tv' && dd.seasons.length>1 && (!ee || ee.st!=='done')){ startPick(key); return; }
+    setStatus(key, st); if (st==='done' && ui.tab==='watching' && sheetId==null) toast('Rangé dans Vus. Pense à le noter !', 'Noter', () => openSheet(key)); return; }
   if (d.score){ const s = +d.score, e = entries.get(sheetId); if (e) save(sheetId, {score: e.score===s ? 0 : s}); return; }
   if (d.thread){ openThreads.has(d.thread) ? openThreads.delete(d.thread) : openThreads.add(d.thread); renderSheet(); const i = document.querySelector(`[data-cform="${d.thread}"] input`); i && i.focus({preventScroll:true}); return; }
   if (d.cdel){ const parts = d.cdel.split('|'); deleteComment(parts[0]+'|'+parts[1], parts[2]); return; }
