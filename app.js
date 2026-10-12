@@ -65,8 +65,7 @@ function cropUI(img, aspect, round){
     const nw = img.naturalWidth, nh = img.naturalHeight;
     const wrap = document.createElement('div'); wrap.className = 'crop-scrim';
     wrap.innerHTML = `<div class="crop-box" role="dialog" aria-modal="true" aria-labelledby="cropT">
-      <h2 id="cropT">Choisis la partie à afficher</h2>
-      <p class="note">Fais glisser l’image pour la placer, et zoome avec le curseur${matchMedia('(pointer:coarse)').matches?' ou avec deux doigts':' ou la molette'}.</p>
+      <h2 id="cropT">Recadrer</h2>
       <div class="crop-frame${round?' round':''}" style="aspect-ratio:${aspect}" tabindex="0" aria-label="Zone visible : flèches pour déplacer, plus et moins pour zoomer"><img alt="" draggable="false"></div>
       <label class="crop-zoom"><span>Zoom</span><input type="range" min="1" max="5" step="0.01" value="1" aria-label="Zoom"></label>
       <div class="links"><button class="btn" type="button" data-crop="cancel">Annuler</button><button class="btn primary" type="button" data-crop="ok">${ICON.check} Valider</button></div></div>`;
@@ -508,7 +507,7 @@ function watchRow(key, e){
   return `<article class="row">${cover}
     <div style="min-width:0">
       <h3 data-open="${key}" tabindex="0" role="button">${esc(d.t)}</h3>
-      <div class="s">${d.seasons.length>1?`${esc(s.name||'Saison '+n)}, `:''}${plural(s.eps,'épisode','épisodes')}${behind>1?`, ${behind} épisodes de retard`:''}</div>${nextLine(d)}
+      <div class="s">${[d.seasons.length>1 ? esc(s.name||'Saison '+n) : '', behind>1 ? `${behind} de retard` : ''].filter(Boolean).join(', ')}</div>${nextLine(d)}
       <div class="prog"><span class="count num"><b>${w}</b> / ${s.eps||'?'}</span>
         <button class="plus" type="button" data-plus="${key}" ${w>=aired?'disabled':''}>+1 épisode</button></div>
       ${pipsFor(key, d, e, n)}
@@ -545,11 +544,11 @@ function summary(){
   if (!me){ $('#summary').textContent = ''; return; }
   const eps = all.reduce((s,e) => s + (e.kind==='tv' ? watchedTotal(e) : 0), 0);
   const mins = all.reduce((s,e) => s + (e.kind==='tv' ? watchedTotal(e)*((e.m&&e.m.rt)||24) : (e.st==='done' ? (e.m&&e.m.rt)||100 : 0)), 0);
-  $('#summary').innerHTML = all.length
+  $('#summary').innerHTML = '' && all.length
     ? `<b class="num">${n('done')}</b> ${n('done')>1?'vus':'vu'}, <b class="num">${n('watching')}</b> en cours, <b class="num">${n('plan')}</b> à regarder. <b class="num">${eps.toLocaleString('fr-FR')}</b> épisodes, soit environ <b class="num">${Math.round(mins/60).toLocaleString('fr-FR')} h</b> devant l’écran.`
     : `Salut ${esc(profile&&profile.pseudo||'')} ! Ta liste est vide pour l’instant.`;
 }
-const emptyState = (title, text, action) => `<div class="empty"><h2>${title}</h2><p>${text}</p>${action||''}</div>`;
+const emptyState = (title, text, action) => `<div class="empty"><h2>${title}</h2>${text?`<p>${text}</p>`:''}${action||''}</div>`;
 const goDiscover = `<button class="btn primary" type="button" data-go="discover">${ICON.search} Chercher un anime</button>`;
 
 function keepFocus(fn){
@@ -592,10 +591,10 @@ function newsItems(){
 }
 function newsBlock(){
   const items = newsItems(); if (!items.length) return '';
-  return `<section class="news"><h2 class="sec" style="margin-top:0">Nouveautés pour tes animes vus</h2><div class="news-list">${items.map(x => {
+  return `<section class="news"><h2 class="sec" style="margin-top:0">Nouveautés</h2><div class="news-list">${items.map(x => {
     const name = x.season ? (x.season.n && x.d.seasons.length>1 ? `Saison ${x.season.n}` : 'Nouveaux épisodes') : '';
     const line = x.kind==='new'
-      ? `${esc(name)}${x.airing?' en cours de diffusion':' disponible'}, ${plural(x.fresh,'nouvel épisode','nouveaux épisodes')}${x.d.next?`. ${esc(nextLine(x.d).replace(/<[^>]+>/g,''))}`:''}`
+      ? `${esc(name)} : ${plural(x.fresh,'nouvel épisode','nouveaux épisodes')}`
       : `Saison ${x.season.n} annoncée, sortie ${esc(fmtDay(x.season.air))}${x.season.air.slice(0,4)!==String(new Date().getFullYear())?' '+x.season.air.slice(0,4):''}`;
     return `<article class="news-item${x.kind==='soon'?' soon':''}">
       <div class="cover" data-open="${x.k}">${x.e.m&&x.e.m.poster?`<img src="${esc(IMG(x.e.m.poster,'w185'))}" alt="" loading="lazy">`:''}</div>
@@ -614,9 +613,9 @@ function listView(){
   if (!SORTS.some(s => s[0]===ui.sort)) ui.sort = 'recent';
   const total = [...entries.values()].filter(e => ui.tab==='done' ? (e.st==='done'||e.st==='dropped') : e.st===ui.tab).length;
   const news = ui.tab==='watching' ? newsBlock() : '';
-  if (!total) return ui.tab==='watching' ? news + emptyState('Rien en cours', 'Commence un anime de ta liste « À regarder », ou trouve-en un nouveau.', goDiscover)
-    : ui.tab==='plan' ? emptyState('Ta liste d’envies est vide', 'Ajoute les animes que tu veux voir : tu sauras où ils sont dispos en France.', goDiscover)
-    : emptyState('Aucun anime vu pour l’instant', 'Ajoute ceux que tu as déjà regardés pour les noter et les recommander à tes amis.', goDiscover);
+  if (!total) return ui.tab==='watching' ? news + emptyState('Rien en cours', '', goDiscover)
+    : ui.tab==='plan' ? emptyState('Rien à regarder', '', goDiscover)
+    : emptyState('Aucun anime vu', '', goDiscover);
   const list = sortList(myFiltered(ui.tab));
   let body;
   if (!list.length) body = `<p class="msg">Aucun anime ne correspond${ui.mine?' sur tes plateformes':''}.</p>`;
@@ -745,7 +744,6 @@ function discoverView(){
       if (hidden && ui.animeOnly) body += `<p class="msg">${plural(hidden, 'autre résultat', 'autres résultats')} (films, séries, animation non japonaise). <button class="btn small" type="button" id="showAll">Les afficher</button></p>`;
       if (disc.more) body += `<div class="more"><button class="btn" type="button" id="moreRes">${disc.loading?'Chargement…':'Plus de résultats'}</button></div>`;
     }
-    if (ui.mine) body = `<p class="note" style="margin:-6px 0 12px">Le filtre « Mes plateformes » s’applique aux suggestions ; pour une recherche, regarde les dispos dans chaque fiche.</p>` + body;
   } else {
     loadHome(); loadForYou(); loadFriends();
     const sec = (title, l) => l.length ? `<h2 class="sec">${title}</h2>${shelfOf(l)}` : '';
@@ -784,8 +782,8 @@ function friendsView(){
       return `<div class="res"><button class="who-btn" type="button" data-friend="${r.uid}">${avatar(r.pseudo)}<b>${esc(r.pseudo)}</b></button>${act}</div>`;
     }).join('')}</div>`;
   }
-  const mineLine = `<p class="note" style="margin-bottom:14px">Ton pseudo : <b>${esc(profile.pseudo)}</b>. Donne-le à tes potes pour qu’ils te trouvent.</p>`;
-  const reqs = requests.length ? `<h2 class="sec">Demandes reçues</h2><div class="results">${requests.map(r => `<div class="res req"><button class="who-btn" type="button" data-friend="${r.uid}">${avatar(r.pseudo)}<span class="who-t"><b>${esc(r.pseudo)}</b><span class="note">veut voir ta liste</span></span></button>
+  const mineLine = `<p class="note" style="margin-bottom:14px">Ton pseudo : <b>${esc(profile.pseudo)}</b></p>`;
+  const reqs = requests.length ? `<h2 class="sec">Demandes reçues</h2><div class="results">${requests.map(r => `<div class="res req"><button class="who-btn" type="button" data-friend="${r.uid}">${avatar(r.pseudo)}<span class="who-t"><b>${esc(r.pseudo)}</b></span></button>
       <span class="req-act"><button class="btn small primary" type="button" data-accept="${r.uid}">${ICON.check} Accepter</button><button class="btn small" type="button" data-decline="${r.uid}">Refuser</button></span></div>`).join('')}</div>` : '';
   if (!fl.length) return searchBox + results + reqs + mineLine + (results||reqs ? '' : emptyState('Ajoute tes amis', 'Cherche le pseudo d’un ami et envoie-lui une demande. Quand il accepte, tu vois ce qu’il a vu, ses notes et ce qu’il recommande.'));
   const tag = f => f.status==='pending' ? ' <span class="note">(en attente)</span>' : f.status==='refused' ? ' <span class="note">(refusée)</span>' : '';
@@ -825,24 +823,21 @@ function loginScreen(){
   if (!CONFIG.firebase || !CONFIG.tmdbKey) return `<section class="hello"><h2>Presque prêt</h2><p>Le site attend encore ses réglages Firebase et TMDB dans <code>config.js</code>.</p></section>`;
   return `<section class="hello">
     <h2>Tes animes, tes saisons, tes potes.</h2>
-    <p>Note ce que tu as vu, coche tes épisodes, sache où regarder en France, et découvre ce que tes amis recommandent.</p>
     <button class="btn primary" type="button" id="signin"><span class="g-dot" aria-hidden="true"></span>Se connecter avec Google</button>
-    <p class="fine">Ton profil est privé : seules les personnes que tu acceptes voient ta liste. Ton adresse e-mail n’est jamais partagée.</p>
   </section>`;
 }
 function pseudoForm(current, first){
   return `<form class="form" id="pseudoForm">
     <label for="pseudoIn">Pseudo</label>
     <input type="text" id="pseudoIn" value="${esc(current||'')}" maxlength="20" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ex. melvin" required>
-    <p class="note">De 3 à 20 caractères : lettres, chiffres, point, tiret ou tiret bas. Tes amis te trouveront avec.</p>
+    <p class="note">3 à 20 caractères, sans accent ni espace.</p>
     <p class="note warn-t" id="pseudoErr"></p>
     <div><button class="btn primary" type="submit">${first?'C’est mon pseudo':'Changer de pseudo'}</button></div></form>`;
 }
 function openPseudo(){
   sheetId = 'pseudo'; $('#scrim').hidden=false; $('#sheet').hidden=false; document.body.style.overflow='hidden';
   const guess = (me.name||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9_.-]/g,'').slice(0,20);
-  $('#sheet').innerHTML = `<div class="sh-body" style="padding-top:26px"><h2 id="shTitle" style="font-family:var(--display);font-weight:400;font-size:22px;margin:0">Choisis ton pseudo</h2>
-    <p class="note" style="font-size:14px">C’est le nom que verront tes amis.</p>${pseudoForm(guess, true)}</div>`;
+  $('#sheet').innerHTML = `<div class="sh-body" style="padding-top:26px"><h2 id="shTitle" style="font-family:var(--display);font-weight:400;font-size:22px;margin:0">Choisis ton pseudo</h2>${pseudoForm(guess, true)}</div>`;
   $('#pseudoIn').focus();
 }
 async function submitPseudo(ev){
@@ -937,8 +932,7 @@ function renderSheet(){
   if (String(sheetId).startsWith('friend:')) return renderFriend(sheetId.slice(7));
   const key = sheetId, d = dcache[key]; if (!d) return;
   const e = entries.get(key);
-  const facts = [d.kind==='tv'?'Série':'Film', d.kind==='tv'&&TV_STATUS[d.status], d.yr, d.kind==='tv'&&d.seasons.length&&plural(d.seasons.length,'saison','saisons'), d.kind==='tv'&&d.total&&`${d.total} épisodes`,
-    d.runtime&&`${d.runtime} min${d.kind==='tv'?' par épisode':''}`, d.studio, d.vote&&`${(Math.round(d.vote*10)/10).toLocaleString('fr-FR')}/10 sur TMDB`].filter(Boolean);
+  const facts = [d.yr, d.kind==='tv' ? TV_STATUS[d.status] : d.runtime && `${d.runtime} min`, d.kind==='tv'&&d.seasons.length&&plural(d.seasons.length,'saison','saisons'), d.vote&&`★ ${(Math.round(d.vote*10)/10).toLocaleString('fr-FR')}`].filter(Boolean);
   let you = '';
   if (e){
     let stars = ''; for (let i=1;i<=10;i++) stars += `<button type="button" class="${e.score>=i?'on':''}" data-score="${i}" aria-label="Noter ${i} sur 10" aria-pressed="${e.score===i}">${i}</button>`;
@@ -946,14 +940,11 @@ function renderSheet(){
         <div class="seg" role="group" aria-label="Statut">${Object.entries(STATUS).map(([k,l])=>`<button type="button" data-st="${key}|${k}" aria-pressed="${e.st===k}">${l}</button>`).join('')}</div></div>
       <div class="block"><h3>Ma note</h3><div class="stars">${stars}</div></div>
       <div class="block"><div class="links"><button class="reco" type="button" data-reco aria-pressed="${!!e.reco}">${ICON.heart} ${e.reco?'Tu le recommandes':'Je le recommande'}</button>
-        <button class="reco" type="button" data-fav aria-pressed="${!!e.fav}">${ICON.star} ${e.fav?'Dans tes préférés':'Préféré'}</button></div>
-        <p class="note" style="margin-top:6px">Tes abonnés le verront dans leurs recommandations.</p></div>
-      <div class="block"><h3><label for="noteIn">Mon avis</label></h3><textarea id="noteIn" placeholder="Ce que tu en as pensé, ton épisode préféré, à qui le conseiller…">${esc(e.note)}</textarea>
-        <p class="note" style="margin-top:4px">Visible par tes abonnés, qui peuvent le commenter.</p>${e.note || e.score ? thread(me.uid, key) : ''}</div>`;
+        <button class="reco" type="button" data-fav aria-pressed="${!!e.fav}">${ICON.star} ${e.fav?'Dans tes préférés':'Préféré'}</button></div></div>
+      <div class="block"><h3><label for="noteIn">Mon avis</label></h3><textarea id="noteIn" placeholder="Ce que tu en as pensé, ton épisode préféré, à qui le conseiller…">${esc(e.note)}</textarea>${e.note || e.score ? thread(me.uid, key) : ''}</div>`;
   } else {
     you = `<div class="block"><h3>Ma liste</h3>
-        <div class="seg" role="group" aria-label="Statut">${Object.entries(STATUS).filter(([k2]) => k2!=='dropped').map(([k2,l])=>`<button type="button" data-st="${key}|${k2}" aria-pressed="false">${l}</button>`).join('')}</div>
-        <p class="note" style="margin-top:6px">Pas encore dans ta liste. Choisis un statut pour l’ajouter.</p></div>`;
+        <div class="seg" role="group" aria-label="Statut">${Object.entries(STATUS).filter(([k2]) => k2!=='dropped').map(([k2,l])=>`<button type="button" data-st="${key}|${k2}" aria-pressed="false">${l}</button>`).join('')}</div></div>`;
   }
   const keepScroll = $('#sheet').scrollTop;
   document.title = `${d.t} · Mes Animes`;
@@ -963,7 +954,7 @@ function renderSheet(){
     <div class="page-in">
     <div class="sh-head"><div class="cover">${d.poster?`<img src="${esc(IMG(d.poster,'w500'))}" alt="">`:''}</div>
       <div style="min-width:0"><h2 id="shTitle">${esc(d.t)}</h2>${d.ot && d.ot!==d.t ? `<div class="alt">${esc(d.ot)}</div>`:''}</div>
-      <div class="head-facts"><div class="facts">${facts.map(f=>`<span class="fact">${esc(f)}</span>`).join('')}${d.genres.map(g=>`<span class="fact">${esc(g)}</span>`).join('')}</div>${nextLine(d)}</div></div>
+      <div class="head-facts"><div class="facts">${facts.map(f=>`<span class="fact">${esc(f)}</span>`).join('')}</div>${nextLine(d)}</div></div>
     <div class="page-cols">
       <div class="sh-body">
         ${d.kind==='tv' ? seasonsBlock(key, d, e) : ''}
@@ -1025,8 +1016,7 @@ function seasonsBlock(key, d, e){
   const all = [...d.seasons, ...(hasSp && showSpecials ? [d.specials] : [])];
   if (!all.length) return '';
   if (pick && pick.key===key){
-    return `<div class="block picker" id="picker"><h3>Quelles saisons as-tu vues ?</h3>
-      <p class="note" style="margin:-2px 0 10px">Décoche celles que tu n’as pas encore vues, puis valide.</p>
+    return `<div class="block picker" id="picker"><h3>Saisons vues</h3>
       <div class="pick-list">${all.map(s => {
         const aired = s.n===0 ? s.eps : airedIn(d, s.n), on = pick.sel.has(s.n);
         return `<button class="pick-row" type="button" data-picks="${s.n}" aria-pressed="${on}" ${aired===0?'disabled':''}>
@@ -1047,19 +1037,19 @@ function seasonsBlock(key, d, e){
     const seen = fe && fe.st==='done';
     const fst = !fe ? 'none' : fe.st==='done' ? 'done' : fe.st==='dropped' ? 'skip' : 'plan';
     const mark = `<label class="s-state st-${fst==='none'?'plan':fst}"><span class="vh">État du film ${esc(h.t)}</span>
-      <select data-fstate="${h.key}">${[['done','Vu'],['plan','À voir'],['none','Pas dans ma liste']].map(([v,l]) => `<option value="${v}"${v===fst||(fst==='skip'&&v==='none')?' selected':''}>${l}</option>`).join('')}</select>${ICON.chev}</label>`;
+      <select data-fstate="${h.key}">${[['none','—'],['plan','À voir'],['done','Vu']].map(([v,l]) => `<option value="${v}"${v===fst||(fst==='skip'&&v==='none')?' selected':''}>${l}</option>`).join('')}</select>${ICON.chev}</label>`;
     // on the show's page its name is implied: "Fire Force : Les débuts" reads "Les débuts"
     const short = (() => { for (const nm of [d.t, d.ot]){ if (!nm) continue; const b = baseName(nm); const t = String(h.t); if (b && fold(t).startsWith(b)){ const rest = t.slice(b.length).replace(/^[\s:：\-–—,.]+/, ''); let r = rest.replace(/^(le |the )?(film|movie)\s*(\d*)\s*[-:：–—]\s*/i, (m0, a1, a2, n) => n ? `${n} : ` : ''); if (r.length<3) r = rest; if (r.length>=3) return r.charAt(0).toUpperCase()+r.slice(1); } } return h.t; })();
     return `<div class="season film${seen?' seen':''}"><div class="season-hd">
       <button class="fam-open" type="button" data-open="${h.key}" title="Ouvrir la page du film">
         <span class="thumb">${h.poster?`<img src="${esc(IMG(h.poster,'w92'))}" alt="" loading="lazy">`:''}</span>
-        <span style="min-width:0"><span class="ft"><span class="kind">Film</span> ${esc(short)}</span><span class="fs">${h.yr||'Date inconnue'}${where?`, ${where}`:''}</span></span>
+        <span style="min-width:0"><span class="ft"><span class="kind">Film</span> ${esc(short)}</span><span class="fs">${h.yr||''}</span></span>
       </button><span class="fa">${mark}</span></div></div>`;
   };
-  return `<div class="block"><h3>${fl.main.length ? 'Saisons et films' : 'Saisons'}${d.seasons.length?` <span class="note" style="display:inline">(${plural(d.seasons.length,'saison','saisons')}${fl.main.length?`, ${plural(fl.main.length,'film','films')}`:''})</span>`:''}</h3>
+  return `<div class="block"><h3>${fl.main.length ? 'Saisons et films' : 'Saisons'}</h3>
     <div class="seasons">${items.map((it, i) => { if (it.f) return filmRow(it.f, i); const s = it.s; return (() => {
       const w = e ? ((e.w||{})[s.n]||0) : 0, aired = s.n===0 ? s.eps : airedIn(d, s.n), full = w>=s.eps && s.eps>0, open = openSeason===s.n;
-      const sub = [e && w && !full ? `${w} sur ${s.eps} vus` : plural(s.eps,'épisode','épisodes'), s.air ? (s.air > today() ? `sortie ${fmtDay(s.air)}` : s.air.slice(0,4)) : '', aired<s.eps && aired>0 ? `${aired} sortis` : ''].filter(Boolean).join(', ');
+      const sub = [s.air ? (s.air > today() ? `sortie ${fmtDay(s.air)}` : s.air.slice(0,4)) : '', plural(s.eps,'épisode','épisodes')].filter(Boolean).join(', ');
       const st = seasonState(d, e, s.n);
       const opts = (aired===0 && st!=='done' ? ['plan','skip'] : ['done','watching','plan','skip']);
       const mark = `<label class="s-state st-${st}"><span class="vh">État de ${esc(seasonLabel(s))}</span>
@@ -1074,10 +1064,10 @@ function seasonsBlock(key, d, e){
           </button>
           <span class="s-acts">${mark}${ignoreBtn}</span>
         </div>
-        ${open ? (e ? pipsFor(key, d, e, s.n) : `<p class="note" style="padding:0 12px 12px">Choisis « En cours » ou « Vue » pour ajouter l’anime à ta liste et cocher épisode par épisode.</p>`) : ''}
+        ${open ? (e ? pipsFor(key, d, e, s.n) : '') : ''}
       </div>`; })(); }).join('')}</div>
-    ${fl.hidden ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Autres (${fl.hidden}) : compilations, récaps, éditions spéciales…</button>` : fl.open && fl.list.length>fl.main.length ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Masquer les autres</button>` : ''}
-    <p class="note" style="margin-top:6px">Rangés par date de sortie. Choisis l’état de chaque saison, ou touche-la pour cocher ses épisodes un par un.${hasSp ? ` <button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Afficher les épisodes spéciaux (${d.specials.eps})`}</button>` : ''}</p></div>`;
+    ${fl.hidden ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Autres (${fl.hidden})</button>` : fl.open && fl.list.length>fl.main.length ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Masquer les autres</button>` : ''}
+    ${hasSp ? `<p class="note" style="margin-top:6px"><button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Épisodes spéciaux (${d.specials.eps})`}</button></p>` : ''}</div>`;
 }
 /* films: only the best-known three by default (in release order), the rest folded behind a link */
 const allFilms = new Set();
@@ -1174,10 +1164,9 @@ function whereBlock(d){
     return `<a class="prov${isMine?' mine':''}" href="${esc(link)}" target="_blank" rel="noopener">${p.logo?`<img src="${esc(IMG(p.logo,'w92'))}" alt="">`:''}<span>${esc(p.name)}${isMine?'<br><span class="mine-t">Ton abonnement</span>':''}</span></a>`; };
   const searchLinks = SERVICES.filter(s => s.search && mine.includes(s.key) && !flat.some(p => (svcOf(p.name)||{}).key===s.key));
   return `<div class="block"><h3>Où le regarder en France</h3>
-    ${flat.length ? `<div class="provs">${flat.map(prov).join('')}</div>` : `<p class="note">Pas dispo en abonnement en France pour l’instant.</p>`}
+    ${flat.length ? `<div class="provs">${flat.map(prov).join('')}</div>` : `<p class="note">Pas en streaming en France.</p>`}
     ${d.pv.buy.length ? `<p class="note" style="margin-top:8px">À l’achat ou en location : ${esc(d.pv.buy.map(p=>p.name).join(', '))}.</p>` : ''}
-    ${searchLinks.length ? `<div class="links" style="margin-top:10px">${searchLinks.map(s=>`<a class="btn small" href="${esc(s.search(d.t))}" target="_blank" rel="noopener">Chercher sur ${esc(s.name)}</a>`).join('')}</div>`:''}
-    <p class="note" style="margin-top:8px">Dispos fournies par JustWatch.</p></div>`;
+    ${searchLinks.length ? `<div class="links" style="margin-top:10px">${searchLinks.map(s=>`<a class="btn small" href="${esc(s.search(d.t))}" target="_blank" rel="noopener">Chercher sur ${esc(s.name)}</a>`).join('')}</div>`:''}</div>`;
 }
 /* profile pages (#/u/<id>): banner, avatar, bio, favourites and stats; the list part only for accepted followers */
 let editingProfile = false;
@@ -1226,15 +1215,15 @@ function renderFriend(uid){
           <p class="note">${f.private?`${ICON.lock} Profil privé`:'Profil public'}${!mine && f.followsMe?', te suit':''}</p></div>
         <div class="pf-act">${action}</div>
       </div>
-      ${f.bio ? `<div class="pf-about"><h3>Bio</h3><p>${esc(f.bio)}</p></div>` : mine && !editingProfile ? `<div class="pf-about empty-bio"><h3>Bio</h3><p class="note">Présente-toi en quelques mots avec « Modifier mon profil ».</p></div>` : ''}
+      ${f.bio ? `<div class="pf-about"><h3>Bio</h3><p>${esc(f.bio)}</p></div>` : ''}
       <p class="pf-counts">${counts.join('')}</p>
       ${canList && peopleTab ? peopleBlock(f, mine) : ''}`;
   let body = '';
   if (mine && editingProfile) body += profileEditor();
   if (f.status!=='ok'){
     body += `<div class="sh-body"><div class="private-box"><span class="lock" aria-hidden="true">${ICON.lock}</span>${f.status==='pending'
-      ? `<p class="note" style="font-size:14px">Ta demande est envoyée. Dès que ${esc(f.pseudo)} l’accepte, tu verras ses préférés, ce qu’il a vu, ses notes et ce qu’il recommande.</p><div class="links"><button class="btn small danger" type="button" data-unfollow="${uid}">Annuler la demande</button></div>`
-      : `<p class="note" style="font-size:14px">Sa liste est privée. Envoie-lui une demande : s’il accepte, tu verras ses préférés, ce qu’il a vu, ses notes et ce qu’il recommande.</p>`}</div></div>`;
+      ? `<p class="note" style="font-size:14px">Demande envoyée.</p><div class="links"><button class="btn small danger" type="button" data-unfollow="${uid}">Annuler la demande</button></div>`
+      : `<p class="note" style="font-size:14px">Profil privé.</p>`}</div></div>`;
   } else {
     const l = [...f.list.entries()].sort((a,b)=>(b[1].updated||0)-(a[1].updated||0));
     const pick = s2 => l.filter(([,e]) => e.st===s2);
@@ -1243,8 +1232,7 @@ function renderFriend(uid){
     const favs = l.filter(([,e]) => e.fav).slice(0,4), reco = l.filter(([,e]) => e.reco), watching = pick('watching'), done = pick('done').sort((a,b)=>(b[1].score||0)-(a[1].score||0)), plan = pick('plan');
     const common = mine ? 0 : l.filter(([k,e]) => e.st==='done' && entries.get(k) && entries.get(k).st==='done').length;
     body += `<div class="sh-body">
-      ${favs.length ? `<div class="block"><h3>${mine?'Mes préférés':'Ses préférés'}</h3><div class="favs">${favs.map(([k,e]) => posterCard(k, e.m||{t:'…'}, {friend:true, sub:''})).join('')}</div></div>`
-        : mine ? `<p class="note">Choisis tes 4 animes préférés avec le bouton « Préféré » sur leur page : ils s’afficheront en haut de ton profil.</p>` : ''}
+      ${favs.length ? `<div class="block"><h3>${mine?'Mes préférés':'Ses préférés'}</h3><div class="favs">${favs.map(([k,e]) => posterCard(k, e.m||{t:'…'}, {friend:true, sub:''})).join('')}</div></div>` : ''}
       ${st && (st.eps||st.done) ? `<div class="pf-stats">
         <div><b class="num">${st.done}</b><span>animes vus</span></div><div><b class="num">${st.watching}</b><span>en cours</span></div>
         <div><b class="num">${st.eps.toLocaleString('fr-FR')}</b><span>épisodes</span></div><div><b class="num">${st.hours.toLocaleString('fr-FR')} h</b><span>devant l’écran</span></div>
@@ -1301,18 +1289,15 @@ function profileEditor(){
     <div class="block"><h3>Photo de profil</h3>
       <div class="up-row">${avatar(profile.pseudo, true, profile.color, profile.photo)}
         <label class="btn small primary" style="cursor:pointer">Choisir une photo<input type="file" id="photoIn" accept="image/*" hidden></label>
-        ${profile.photo ? `<button class="btn small" type="button" id="photoOff">Retirer</button>` : ''}</div>
-      <p class="note" style="margin-top:6px">Elle est recadrée en carré, au centre.</p></div>
+        ${profile.photo ? `<button class="btn small" type="button" id="photoOff">Retirer</button>` : ''}</div></div>
     <div class="block"><h3><label for="bioIn">Bio</label></h3>
       <textarea id="bioIn" maxlength="160" placeholder="Ce que tu aimes regarder, ton anime de cœur, tes plateformes…">${esc(profile.bio||'')}</textarea>
       <p class="note"><span id="bioCount">${(profile.bio||'').length}</span>/160</p></div>
     <div class="block"><h3>Couleur de l’avatar</h3><div class="swatches">${PCOLORS.map(c => `<button type="button" class="sw${(profile.color||avColor(profile.pseudo))===c?' on':''}" style="--sw:${c}" data-color="${c}" aria-label="Couleur ${c}" aria-pressed="${(profile.color||avColor(profile.pseudo))===c}"></button>`).join('')}</div></div>
     <div class="block"><h3>Bannière</h3>
-      <div class="up-row" style="margin-bottom:10px"><label class="btn small primary" style="cursor:pointer">Importer une image<input type="file" id="bannerIn" accept="image/*" hidden></label>
-        ${profile.banner==='custom' ? `<span class="note">Ton image est utilisée.</span>` : ''}</div>
-      <p class="note" style="margin-bottom:8px">Elle est recadrée au format large (3 × 1). Tu peux aussi prendre l’image d’un anime de ta liste :</p>
+      <div class="up-row" style="margin-bottom:10px"><label class="btn small primary" style="cursor:pointer">Importer une image<input type="file" id="bannerIn" accept="image/*" hidden></label></div>
       ${banners.length ? `<div class="banners"><button type="button" class="bn none${!profile.banner?' on':''}" data-banner="" aria-pressed="${!profile.banner}">Aucune</button>${banners.map(d => `<button type="button" class="bn${profile.banner===d.back?' on':''}" data-banner="${esc(d.back)}" aria-pressed="${profile.banner===d.back}" aria-label="${esc(d.t)}" style="background-image:url('${esc(IMG(d.back,'w300'))}')"></button>`).join('')}</div>`
-        : `<p class="note">Ajoute des animes à ta liste : leurs images pourront aussi servir de bannière.</p>`}</div>
+        : ''}</div>
   </div></div>`;
 }
 function saveProfileField(patch, msg){
@@ -1328,17 +1313,16 @@ function renderSettings(){
     <div class="sh-body" style="padding-top:22px">
       <h2 id="shTitle" style="font-family:var(--display);font-weight:400;font-size:22px;margin:0">Réglages</h2>
       <div class="block"><h3>Mes plateformes</h3>
-        <p class="note" style="margin-bottom:8px">Elles sont mises en avant sur chaque anime, et le filtre « Mes plateformes » s’en sert.</p>
         <div class="chk">${SERVICES.map(s=>`<label><input type="checkbox" data-plat="${s.key}" ${myPlatforms().includes(s.key)?'checked':''}>${esc(s.name)}</label>`).join('')}</div></div>
       <div class="block"><h3>Confidentialité</h3>
         <label class="check-line"><input type="checkbox" id="privateIn" ${isPrivate(profile)?'checked':''}> Profil privé</label>
-        <p class="note" style="margin-top:4px">${isPrivate(profile) ? 'Seules les personnes que tu acceptes voient ta liste, tes notes et tes avis. Les autres voient juste ton pseudo.' : 'Toute personne connectée au site peut voir ta liste, sans demande.'}</p></div>
+        </div>
       <div class="block"><h3>Mes abonnés <span class="note" style="display:inline">(${(profile.followers||[]).length})</span></h3>
         ${(profile.followers||[]).length ? `<div class="results" id="followersList">${(profile.followers||[]).map(uid => `<div class="res">${avatar(pseudoCache.get(uid)||'?')}<b>${esc(pseudoCache.get(uid)||'…')}</b><button class="btn small" type="button" data-rmfollower="${uid}">Retirer</button></div>`).join('')}</div>`
-          : `<p class="note">Personne ne voit encore ta liste. Les demandes que tu acceptes apparaissent ici.</p>`}</div>
+          : `<p class="note">Personne pour l’instant.</p>`}</div>
       <div class="block"><h3>Mon pseudo</h3>${pseudoForm(profile.pseudo, false)}</div>
       <div class="block"><h3>Mon compte</h3>
-        <p class="note" style="margin-bottom:8px">Connecté avec Google${me.name?` (${esc(me.name)})`:''}. Ta liste est enregistrée en ligne et la même sur tous tes appareils.</p>
+        
         <div class="links"><button class="btn small" type="button" id="exp">Télécharger ma liste</button><button class="btn small danger" type="button" id="signout">Me déconnecter</button></div></div>
       <div class="block credit"><img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_short-8e7b30f73a4020692ccca9c88bafe5dcb6f8a62a4c6bc55cd9ba82bb2cd95f6c.svg" alt="TMDB">
         <p class="note">This product uses the TMDB API but is not endorsed or certified by TMDB. Infos et images : <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>. Dispos en France : <a href="https://www.justwatch.com/fr" target="_blank" rel="noopener">JustWatch</a>.</p></div>

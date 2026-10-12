@@ -481,3 +481,12 @@ button.pf-count[aria-expanded="true"]{border-color:var(--accent);background:var(
 .s-state option{color:var(--ink);background:var(--surface)}
 .season.skipped .fam-open{opacity:.45}
 @media (max-width:420px){.s-state select{padding:0 30px 0 11px;font-size:13px;max-width:150px}}
+/* calmer chrome */
+.summary{display:none}
+.nav{margin-top:14px}
+.empty{padding:22px}
+.empty h2{margin-bottom:12px}
+.facts .fact{font-size:12.5px;padding:2px 9px}
+.block h3{font-size:14px;color:var(--ink-2)}
+.season.film .s-state select{max-width:120px}
+.season .fs{font-size:12.5px}
