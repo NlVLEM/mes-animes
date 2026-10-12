@@ -1,34 +1,67 @@
 rules_version = '2';
 // Règles de sécurité de la base Mes Animes.
-// - Seules les personnes connectées au site peuvent lire les profils et les listes (c'est ce qui permet de voir ses amis).
-// - Chacun ne peut modifier que son propre profil et sa propre liste.
+// - Les profils sont privés par défaut : pour voir la liste de quelqu'un, il faut lui envoyer une demande et qu'il l'accepte.
+// - Le pseudo et le fait qu'un profil soit privé restent visibles par les personnes connectées, pour pouvoir se trouver.
+// - Chacun ne peut modifier que son propre profil et sa propre liste. Un abonné peut seulement se retirer lui-même des abonnés de quelqu'un.
 // - Un pseudo n'appartient qu'à une seule personne.
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+
     match /pseudos/{p} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null
+      allow read: if signedIn();
+      allow create: if signedIn()
         && p.matches('^[a-z0-9_.-]{3,20}$')
         && request.resource.data.keys().hasOnly(['uid', 'pseudo'])
-        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.uid == me()
         && request.resource.data.pseudo.lower() == p;
-      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow delete: if signedIn() && resource.data.uid == me();
     }
 
     match /users/{uid} {
-      allow read: if request.auth != null;
-      allow create, update: if request.auth != null && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['pseudo', 'platforms', 'following', 'updated'])
-        && request.resource.data.pseudo is string
-        && getAfter(/databases/$(database)/documents/pseudos/$(request.resource.data.pseudo.lower())).data.uid == uid
-        && (!('following' in request.resource.data) || (request.resource.data.following is list && request.resource.data.following.size() <= 200))
-        && (!('platforms' in request.resource.data) || (request.resource.data.platforms is list && request.resource.data.platforms.size() <= 20));
-      allow delete: if request.auth != null && request.auth.uid == uid;
+      // can the person asking see this user's list?
+      function canSee() {
+        let p = get(/databases/$(database)/documents/users/$(uid)).data;
+        return p.get('private', true) == false || me() in p.get('followers', []);
+      }
+      function validProfile() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['pseudo', 'platforms', 'following', 'followers', 'private', 'updated'])
+          && d.pseudo is string
+          && getAfter(/databases/$(database)/documents/pseudos/$(d.pseudo.lower())).data.uid == uid
+          && (!('following' in d) || (d.following is list && d.following.size() <= 300))
+          && (!('followers' in d) || (d.followers is list && d.followers.size() <= 1000))
+          && (!('platforms' in d) || (d.platforms is list && d.platforms.size() <= 20))
+          && (!('private' in d) || d.private is bool);
+      }
+      // a follower removing only themselves from someone's followers
+      function leaving() {
+        let before = resource.data.get('followers', []);
+        let after = request.resource.data.get('followers', []);
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followers'])
+          && me() in before && !(me() in after) && before.hasAll(after) && after.size() == before.size() - 1;
+      }
+
+      allow read: if signedIn();
+      allow create: if signedIn() && me() == uid && validProfile();
+      allow update: if signedIn() && ((me() == uid && validProfile()) || (me() != uid && leaving()));
+      allow delete: if signedIn() && me() == uid;
 
       match /list/{item} {
-        allow read: if request.auth != null;
-        allow write: if request.auth != null && request.auth.uid == uid && item.matches('^(tv|movie)-[0-9]{1,12}$');
+        allow read: if signedIn() && (me() == uid || canSee());
+        allow write: if signedIn() && me() == uid && item.matches('^(tv|movie)-[0-9]{1,12}$');
+      }
+
+      // follow requests sent to this user, one per sender
+      match /requests/{from} {
+        allow read: if signedIn() && (me() == uid || me() == from);
+        allow create: if signedIn() && me() == from && from != uid
+          && request.resource.data.keys().hasOnly(['pseudo', 'at'])
+          && request.resource.data.pseudo is string && request.resource.data.pseudo.size() <= 20
+          && request.resource.data.at is number;
+        allow delete: if signedIn() && (me() == uid || me() == from);
       }
     }
   }

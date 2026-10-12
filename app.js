@@ -17,6 +17,7 @@ const ICON = {
   close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>',
   search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
   back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
+  lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
   heart:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-10-9.3C.4 8.4 2.3 4.5 6 4.1c2.2-.2 3.9 1 6 3.2 2.1-2.2 3.8-3.4 6-3.2 3.7.4 5.6 4.3 4 7.6C19.5 16.4 12 21 12 21z"/></svg>'
 };
 const plural = (n, one, many) => `${n} ${n>1?many:one}`;
@@ -133,7 +134,7 @@ function currentSeason(d, e){
 
 /* ---------- data store: Firebase, or a stand-in for tests ---------- */
 async function firebaseStore(cfg){
-  const fb = await import('./firebase.js?v=1');
+  const fb = await import('./firebase.js?v=2');
   const app = fb.initializeApp(cfg);
   const auth = fb.getAuth(app);
   await fb.setPersistence(auth, fb.browserLocalPersistence).catch(()=>{});
@@ -175,6 +176,15 @@ async function firebaseStore(cfg){
     watchList: (uid, cb, err) => fb.onSnapshot(list(uid), s => { const m = new Map(); s.forEach(d => m.set(d.id, d.data())); cb(m); }, err),
     async getList(uid){ const s = await fb.getDocs(list(uid)); const m = new Map(); s.forEach(d => m.set(d.id, d.data())); return m; },
     putEntry: (uid, key, e) => fb.setDoc(fb.doc(db, 'users', uid, 'list', key), e),
+    sendRequest: (target, from, pseudo) => fb.setDoc(fb.doc(db, 'users', target, 'requests', from), {pseudo, at:Date.now()}),
+    cancelRequest: (target, from) => fb.deleteDoc(fb.doc(db, 'users', target, 'requests', from)),
+    async hasRequest(target, from){ try{ return (await fb.getDoc(fb.doc(db, 'users', target, 'requests', from))).exists(); }catch(e){ return false; } },
+    watchRequests: (uid, cb) => fb.onSnapshot(fb.collection(db, 'users', uid, 'requests'), s => cb(s.docs.map(d => ({uid:d.id, ...d.data()}))), () => {}),
+    async acceptRequest(uid, from){ const b = fb.writeBatch(db); b.update(fb.doc(db, 'users', uid), {followers:fb.arrayUnion(from), updated:Date.now()}); b.delete(fb.doc(db, 'users', uid, 'requests', from)); await b.commit(); },
+    declineRequest: (uid, from) => fb.deleteDoc(fb.doc(db, 'users', uid, 'requests', from)),
+    setFollowing: (uid, target, on) => fb.updateDoc(fb.doc(db, 'users', uid), {following: on ? fb.arrayUnion(target) : fb.arrayRemove(target), updated:Date.now()}),
+    leave: (target, from) => fb.updateDoc(fb.doc(db, 'users', target), {followers:fb.arrayRemove(from)}),
+    removeFollower: (uid, f) => fb.updateDoc(fb.doc(db, 'users', uid), {followers:fb.arrayRemove(f), updated:Date.now()}),
     delEntry: (uid, key) => fb.deleteDoc(fb.doc(db, 'users', uid, 'list', key)),
   };
 }
@@ -243,37 +253,76 @@ function plusOne(key){
   if (cur < airedIn(d, n)) setEp(key, n, cur+1);
 }
 
-/* ---------- friends ---------- */
-const friends = new Map();   // uid -> {pseudo, list: Map, at}
-let friendsLoading = false;
+/* ---------- friends ----------
+   Profiles are private unless their owner makes them public: to see a list you send a request, and its owner accepts it.
+   The database rules enforce it, the page only reflects it. */
+const friends = new Map();   // uid -> {uid, pseudo, status:'ok'|'pending'|'refused'|'gone', private, followsMe, list: Map, at}
+let friendsLoading = false, requests = [];
+const isPrivate = p => !p || p.private !== false;
+const following = () => (profile && profile.following) || [];
+async function loadPerson(uid){
+  try{
+    const p = await Store.getProfile(uid);
+    if (!p){ friends.set(uid, {uid, pseudo:'?', status:'gone', list:new Map(), at:Date.now()}); return; }
+    const base = {uid, pseudo:p.pseudo, private:isPrivate(p), followsMe:(p.following||[]).includes(me.uid), list:new Map(), at:Date.now()};
+    if (!isPrivate(p) || (p.followers||[]).includes(me.uid)){
+      try{ friends.set(uid, {...base, status:'ok', list:await Store.getList(uid)}); }
+      catch(e){ friends.set(uid, {...base, status:'refused'}); }
+    } else friends.set(uid, {...base, status: following().includes(uid) && await Store.hasRequest(uid, me.uid) ? 'pending' : 'refused'});
+  }catch(e){ if (!friends.has(uid)) friends.set(uid, {uid, pseudo:'?', status:'gone', list:new Map(), at:Date.now(), err:true}); }
+}
 async function loadFriends(force){
   if (!profile || friendsLoading) return;
-  const ids = (profile.following||[]).filter(Boolean);
-  for (const uid of [...friends.keys()]) if (!ids.includes(uid)) friends.delete(uid);
+  const ids = following().filter(Boolean);
   const todo = ids.filter(uid => force || !friends.has(uid) || Date.now()-friends.get(uid).at > 5*60e3);
   if (!todo.length) return;
   friendsLoading = true;
-  await Promise.all(todo.map(async uid => {
-    try{
-      const [p, list] = await Promise.all([Store.getProfile(uid), Store.getList(uid)]);
-      friends.set(uid, {uid, pseudo:p ? p.pseudo : '?', list, at:Date.now()});
-    }catch(e){ if (!friends.has(uid)) friends.set(uid, {uid, pseudo:'?', list:new Map(), at:Date.now(), err:true}); }
-  }));
+  await Promise.all(todo.map(loadPerson));
   friendsLoading = false; render(); if (sheetId!=null) renderSheet();
 }
 async function follow(uid, pseudo){
   if (uid===me.uid) return;
-  const following = [...new Set([...(profile.following||[]), uid])];
-  profile.following = following; render();
-  try{ await Store.setProfile(me.uid, {pseudo:profile.pseudo, following}); toast(`Tu suis ${pseudo}`); loadFriends(); }
-  catch(e){ toast('Pas enregistré, réessaie.'); }
+  try{
+    const p = await Store.getProfile(uid);
+    if (isPrivate(p)) await Store.sendRequest(uid, me.uid, profile.pseudo);
+    await Store.setFollowing(me.uid, uid, true);
+    profile.following = [...new Set([...following(), uid])];
+    toast(isPrivate(p) ? `Demande envoyée à ${pseudo}` : `Tu suis ${pseudo}`);
+    friends.delete(uid); await loadPerson(uid); render(); if (sheetId!=null) renderSheet();
+  }catch(e){ toast('La demande n’est pas partie, réessaie.'); }
 }
 async function unfollow(uid){
-  const f = friends.get(uid);
-  profile.following = (profile.following||[]).filter(x => x!==uid); friends.delete(uid); render(); if (sheetId!=null) closeSheet();
-  try{ await Store.setProfile(me.uid, {pseudo:profile.pseudo, following:profile.following}); toast(`Tu ne suis plus ${f ? f.pseudo : 'cette personne'}`); }catch(e){}
+  const f = friends.get(uid), wasPending = f && f.status==='pending';
+  profile.following = following().filter(x => x!==uid);
+  await Promise.all([Store.cancelRequest(uid, me.uid).catch(()=>{}), Store.leave(uid, me.uid).catch(()=>{}), Store.setFollowing(me.uid, uid, false).catch(()=>{})]);
+  friends.delete(uid); await loadPerson(uid);
+  render(); if (sheetId!=null) renderSheet();
+  toast(wasPending ? 'Demande annulée' : `Tu ne suis plus ${f ? f.pseudo : 'cette personne'}`);
 }
-const friendsOn = key => [...friends.values()].map(f => ({f, e:f.list.get(key)})).filter(x => x.e);
+async function acceptRequest(r){
+  try{
+    await Store.acceptRequest(me.uid, r.uid);
+    profile.followers = [...new Set([...(profile.followers||[]), r.uid])];
+    requests = requests.filter(x => x.uid!==r.uid); render();
+    if (following().includes(r.uid)) toast(`${r.pseudo} peut maintenant voir ta liste`);
+    else toast(`${r.pseudo} peut maintenant voir ta liste`, 'Suivre en retour', () => follow(r.uid, r.pseudo));
+  }catch(e){ toast('Pas enregistré, réessaie.'); }
+}
+async function declineRequest(r){
+  requests = requests.filter(x => x.uid!==r.uid); render();
+  Store.declineRequest(me.uid, r.uid).catch(() => toast('Pas enregistré, réessaie.'));
+}
+async function removeFollower(uid, pseudo){
+  profile.followers = (profile.followers||[]).filter(x => x!==uid); if (sheetId==='settings') renderSettings();
+  try{ await Store.removeFollower(me.uid, uid); toast(`${pseudo} ne voit plus ta liste`); }catch(e){ toast('Pas enregistré, réessaie.'); }
+}
+const pseudoCache = new Map();
+async function pseudoOf(uid){
+  if (pseudoCache.has(uid)) return pseudoCache.get(uid);
+  const f = friends.get(uid); if (f && f.pseudo!=='?'){ pseudoCache.set(uid, f.pseudo); return f.pseudo; }
+  try{ const p = await Store.getProfile(uid); const v = p ? p.pseudo : '?'; pseudoCache.set(uid, v); return v; }catch(e){ return '?'; }
+}
+const friendsOn = key => following().map(uid => friends.get(uid)).filter(f => f && f.status==='ok').map(f => ({f, e:f.list.get(key)})).filter(x => x.e);
 
 /* ---------- rendering ---------- */
 function platBadges(m){
@@ -369,7 +418,7 @@ function toolsBar(placeholder, sorts, extra=''){
 function summary(){
   const all = [...entries.values()];
   const n = st => all.filter(e => e.st===st).length;
-  document.querySelectorAll('[data-c]').forEach(el => { const c = el.dataset.c==='done' ? n('done')+n('dropped') : el.dataset.c==='friends' ? (profile&&profile.following||[]).length : n(el.dataset.c); el.textContent = c||''; });
+  document.querySelectorAll('[data-c]').forEach(el => { const c = el.dataset.c==='done' ? n('done')+n('dropped') : el.dataset.c==='friends' ? requests.length : n(el.dataset.c); el.textContent = c||''; });
   if (!me){ $('#summary').textContent = ''; return; }
   const eps = all.reduce((s,e) => s + (e.kind==='tv' ? watchedTotal(e) : 0), 0);
   const mins = all.reduce((s,e) => s + (e.kind==='tv' ? watchedTotal(e)*((e.m&&e.m.rt)||24) : (e.st==='done' ? (e.m&&e.m.rt)||100 : 0)), 0);
@@ -526,7 +575,8 @@ function discoverView(){
 let fq = '', fres = null, fresErr = '', fT = null;
 function friendsView(){
   loadFriends();
-  const fl = (profile.following||[]).map(uid => friends.get(uid) || {uid, pseudo:'…', list:new Map()});
+  const fl = following().map(uid => friends.get(uid) || {uid, pseudo:'…', status:'loading', list:new Map()});
+  const okFl = fl.filter(f => f.status==='ok');
   const searchBox = `<div class="tools"><label class="search">${ICON.search}<input type="search" id="fq" placeholder="Chercher un ami par son pseudo" value="${esc(fq)}" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Chercher un ami par son pseudo"></label></div>`;
   let results = '';
   if (fq.trim().length>=2){
@@ -534,17 +584,24 @@ function friendsView(){
     else if (!fres) results = `<p class="msg">Recherche…</p>`;
     else if (!fres.length) results = `<p class="msg">Personne avec ce pseudo. Vérifie l’orthographe, ou demande-lui de se connecter une première fois au site.</p>`;
     else results = `<div class="results">${fres.map(r => {
-      const isMe = r.uid===me.uid, f = (profile.following||[]).includes(r.uid);
-      return `<div class="res">${avatar(r.pseudo)}<b>${esc(r.pseudo)}</b>${isMe?'<span class="note">C’est toi</span>':f?`<button class="btn small" type="button" data-friend="${r.uid}">Voir sa liste</button>`:`<button class="btn small primary" type="button" data-follow="${r.uid}|${esc(r.pseudo)}">${ICON.plus} Suivre</button>`}</div>`;
+      const isMe = r.uid===me.uid, f = friends.get(r.uid), on = following().includes(r.uid);
+      const act = isMe ? '<span class="note">C’est toi</span>'
+        : on && f && f.status==='ok' ? `<button class="btn small" type="button" data-friend="${r.uid}">Voir son profil</button>`
+        : on && f && f.status==='pending' ? `<button class="btn small" type="button" data-friend="${r.uid}">Demande envoyée</button>`
+        : `<button class="btn small primary" type="button" data-follow="${r.uid}|${esc(r.pseudo)}">${ICON.plus} Demander à suivre</button>`;
+      return `<div class="res"><button class="who-btn" type="button" data-friend="${r.uid}">${avatar(r.pseudo)}<b>${esc(r.pseudo)}</b></button>${act}</div>`;
     }).join('')}</div>`;
   }
   const mineLine = `<p class="note" style="margin-bottom:14px">Ton pseudo : <b>${esc(profile.pseudo)}</b>. Donne-le à tes potes pour qu’ils te trouvent.</p>`;
-  if (!fl.length) return searchBox + results + mineLine + (results ? '' : emptyState('Ajoute tes amis', 'Cherche le pseudo d’un ami pour voir ce qu’il a vu, ses notes et ce qu’il recommande. Il doit s’être connecté au site au moins une fois.'));
-  const bar = `<div class="friends-bar">${fl.map(f => `<button class="who" type="button" data-friend="${f.uid}">${avatar(f.pseudo)}${esc(f.pseudo)}</button>`).join('')}</div>`;
+  const reqs = requests.length ? `<h2 class="sec">Demandes reçues</h2><div class="results">${requests.map(r => `<div class="res req"><button class="who-btn" type="button" data-friend="${r.uid}">${avatar(r.pseudo)}<span class="who-t"><b>${esc(r.pseudo)}</b><span class="note">veut voir ta liste</span></span></button>
+      <span class="req-act"><button class="btn small primary" type="button" data-accept="${r.uid}">${ICON.check} Accepter</button><button class="btn small" type="button" data-decline="${r.uid}">Refuser</button></span></div>`).join('')}</div>` : '';
+  if (!fl.length) return searchBox + results + reqs + mineLine + (results||reqs ? '' : emptyState('Ajoute tes amis', 'Cherche le pseudo d’un ami et envoie-lui une demande. Quand il accepte, tu vois ce qu’il a vu, ses notes et ce qu’il recommande.'));
+  const tag = f => f.status==='pending' ? ' <span class="note">(en attente)</span>' : f.status==='refused' ? ' <span class="note">(refusée)</span>' : '';
+  const bar = `<div class="friends-bar">${fl.map(f => `<button class="who${f.status!=='ok'&&f.status!=='loading'?' dim':''}" type="button" data-friend="${f.uid}">${avatar(f.pseudo)}${esc(f.pseudo)}${tag(f)}</button>`).join('')}</div>`;
   // recommendations I haven't seen, most-recommended first
   const agg = (pred) => {
     const m = new Map();
-    for (const f of fl) for (const [k,e] of f.list){ if (!pred(e)) continue; const x = m.get(k) || {k, m:e.m, who:[], sc:[]}; x.who.push(f.pseudo); if (e.score) x.sc.push(e.score); m.set(k, x); }
+    for (const f of okFl) for (const [k,e] of f.list){ if (!pred(e)) continue; const x = m.get(k) || {k, m:e.m, who:[], sc:[]}; x.who.push(f.pseudo); if (e.score) x.sc.push(e.score); m.set(k, x); }
     return [...m.values()];
   };
   const recos = agg(e => e.reco).filter(x => { const mine = entries.get(x.k); return !mine || mine.st==='plan'; }).sort((a,b)=>b.who.length-a.who.length);
@@ -554,14 +611,15 @@ function friendsView(){
   const card = (x, by, extra={}) => posterCard(x.k, x.m||{t:'…'}, {friend:true, by, sub:'', ...extra});
   const avg = x => x.sc.length ? Math.round(x.sc.reduce((s,v)=>s+v,0)/x.sc.length) : 0;
   let body = '';
-  if (friendsLoading && ![...friends.values()].some(f => f.list.size)) body = `<p class="msg">Chargement des listes de tes amis…</p>`;
+  if (friendsLoading && !okFl.some(f => f.list.size)) body = `<p class="msg">Chargement des listes de tes amis…</p>`;
+  else if (!okFl.length) body = `<p class="msg">Tes demandes sont en attente : dès qu’un ami accepte, tu verras sa liste ici.</p>`;
   else {
     body += recos.length ? `<h2 class="sec">Recommandés par tes amis</h2><div class="shelf">${recos.map(x => card(x, `${names(x.who)} recommande${x.who.length>1?'nt':''}`, {heart:true, score:avg(x)})).join('')}</div>` : '';
     body += watching.length ? `<h2 class="sec">Ce qu’ils regardent</h2><div class="shelf">${watching.map(x => card(x, names(x.who))).join('')}</div>` : '';
     body += top.length ? `<h2 class="sec">Leurs coups de cœur que tu n’as pas vus</h2><div class="shelf">${top.slice(0,18).map(x => card(x, names(x.who), {score:avg(x)})).join('')}</div>` : '';
     if (!body) body = `<p class="msg">Tes amis n’ont encore rien ajouté à leur liste.</p>`;
   }
-  return searchBox + results + bar + body;
+  return searchBox + results + reqs + bar + body;
 }
 async function runFriendSearch(){
   const text = fq.trim().toLowerCase(); fres = null; fresErr = ''; render();
@@ -577,7 +635,7 @@ function loginScreen(){
     <h2>Tes animes, tes saisons, tes potes.</h2>
     <p>Note ce que tu as vu, coche tes épisodes, sache où regarder en France, et découvre ce que tes amis recommandent.</p>
     <button class="btn primary" type="button" id="signin"><span class="g-dot" aria-hidden="true"></span>Se connecter avec Google</button>
-    <p class="fine">Ta liste est visible par les personnes connectées au site qui te suivent, jamais ton adresse e-mail.</p>
+    <p class="fine">Ton profil est privé : seules les personnes que tu acceptes voient ta liste. Ton adresse e-mail n’est jamais partagée.</p>
   </section>`;
 }
 function pseudoForm(current, first){
@@ -603,7 +661,7 @@ async function submitPseudo(ev){
   err.textContent = 'Vérification…';
   const first = !profile;
   try{
-    const keep = profile ? {platforms:profile.platforms||[], following:profile.following||[]} : {platforms:['crunchyroll','netflix'], following:[]};
+    const keep = profile ? {platforms:profile.platforms||[], following:profile.following||[], followers:profile.followers||[], private:profile.private!==false} : {platforms:['crunchyroll','netflix'], following:[], followers:[], private:true};
     await Store.claimPseudo(me.uid, v, profile && profile.pseudo, keep);
     profile = {...keep, ...(profile||{}), pseudo:v};
     if (first){ closeSheet(true); startList(); toast(`Bienvenue ${v} !`); setTimeout(followUrl, 0); }
@@ -691,9 +749,9 @@ function renderSheet(){
         <div class="seg" role="group" aria-label="Statut">${Object.entries(STATUS).map(([k,l])=>`<button type="button" data-st="${key}|${k}" aria-pressed="${e.st===k}">${l}</button>`).join('')}</div></div>
       <div class="block"><h3>Ma note</h3><div class="stars">${stars}</div></div>
       <div class="block"><button class="reco" type="button" data-reco aria-pressed="${!!e.reco}">${ICON.heart} ${e.reco?'Tu le recommandes':'Je le recommande'}</button>
-        <p class="note" style="margin-top:6px">Tes amis le verront dans leurs recommandations.</p></div>
+        <p class="note" style="margin-top:6px">Tes abonnés le verront dans leurs recommandations.</p></div>
       <div class="block"><h3><label for="noteIn">Mon avis</label></h3><textarea id="noteIn" placeholder="Ce que tu en as pensé, ton épisode préféré, à qui le conseiller…">${esc(e.note)}</textarea>
-        <p class="note" style="margin-top:4px">Visible par tes amis.</p></div>`;
+        <p class="note" style="margin-top:4px">Visible par tes abonnés.</p></div>`;
   } else {
     you = `<div class="block"><h3>Ajouter à ma liste</h3><div class="links">
       <button class="btn primary" type="button" data-st="${key}|plan">${ICON.plus} À regarder</button>
@@ -780,30 +838,43 @@ function whereBlock(d){
     ${searchLinks.length ? `<div class="links" style="margin-top:10px">${searchLinks.map(s=>`<a class="btn small" href="${esc(s.search(d.t))}" target="_blank" rel="noopener">Chercher sur ${esc(s.name)}</a>`).join('')}</div>`:''}
     <p class="note" style="margin-top:8px">Dispos fournies par JustWatch.</p></div>`;
 }
-function openFriend(uid){ if (isAnimeKey(sheetId)) closeSheet(); lastFocus = document.activeElement; sheetId = 'friend:'+uid; showSheet(); $('#sheet').classList.remove('page'); renderFriend(uid); const c=$('#sheet .sh-close'); c&&c.focus(); }
+function openFriend(uid){ if (isAnimeKey(sheetId)) closeSheet(); lastFocus = document.activeElement; sheetId = 'friend:'+uid; showSheet(); $('#sheet').classList.remove('page'); renderFriend(uid); const c=$('#sheet .sh-close'); c&&c.focus();
+  if (uid!==me.uid && (!friends.has(uid) || friends.get(uid).status!=='ok' || Date.now()-friends.get(uid).at > 60e3)) loadPerson(uid).then(() => { if (sheetId==='friend:'+uid) renderFriend(uid); }); }
 function renderFriend(uid){
+  const close = `<button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button>`;
   const f = friends.get(uid);
-  if (!f){ $('#sheet').innerHTML = `<button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button><p class="msg" style="padding:24px">Chargement…</p>`; loadFriends(); return; }
+  if (!f){ $('#sheet').innerHTML = `${close}<p class="msg" style="padding:24px">Chargement…</p>`; return; }
+  const on = following().includes(uid);
+  const head = (sub) => `<div class="fhead">${avatar(f.pseudo, true)}<div><h2 id="shTitle">${esc(f.pseudo)}</h2><p class="note">${sub}</p></div></div>`;
+  if (f.status==='gone'){ $('#sheet').innerHTML = `${close}<p class="msg" style="padding:24px">Ce compte n’existe plus.</p>`; return; }
+  if (f.status!=='ok'){
+    const lock = f.status==='pending'
+      ? `<p class="note" style="font-size:14px">Ta demande est envoyée. Dès que ${esc(f.pseudo)} l’accepte, tu verras ce qu’il a vu, ses notes et ce qu’il recommande.</p>
+         <div class="links"><button class="btn small" type="button" disabled>Demande envoyée</button><button class="btn small danger" type="button" data-unfollow="${uid}">Annuler la demande</button></div>`
+      : `<p class="note" style="font-size:14px">Sa liste est privée. Envoie-lui une demande : s’il accepte, tu verras ce qu’il a vu, ses notes et ce qu’il recommande.</p>
+         <div class="links"><button class="btn primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Demander à suivre</button></div>`;
+    $('#sheet').innerHTML = `${close}${head(`Profil privé${f.followsMe?', te suit':''}`)}<div class="sh-body"><div class="private-box"><span class="lock" aria-hidden="true">${ICON.lock}</span>${lock}</div></div>`;
+    return;
+  }
   const l = [...f.list.entries()].sort((a,b)=>(b[1].updated||0)-(a[1].updated||0));
   const pick = st => l.filter(([,e]) => st==='done' ? e.st==='done' : e.st===st);
   const shelf = (arr, opts) => `<div class="shelf">${arr.map(([k,e]) => posterCard(k, e.m||{t:'…'}, {friend:true, sub:'', score:e.score||0, heart:e.reco, ...opts(e)})).join('')}</div>`;
   const reco = l.filter(([,e]) => e.reco), watching = pick('watching'), done = pick('done'), plan = pick('plan');
   const common = l.filter(([k,e]) => e.st==='done' && entries.get(k) && entries.get(k).st==='done').length;
-  $('#sheet').innerHTML = `
-    <button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button>
-    <div class="fhead">${avatar(f.pseudo, true)}<div><h2 id="shTitle">${esc(f.pseudo)}</h2>
-      <p class="note">${plural(done.length,'anime vu','animes vus')}, ${watching.length} en cours${common?`, ${common} en commun avec toi`:''}</p></div></div>
+  $('#sheet').innerHTML = `${close}
+    ${head(`${plural(done.length,'anime vu','animes vus')}, ${watching.length} en cours${common?`, ${common} en commun avec toi`:''}${f.followsMe?', te suit':''}`)}
     <div class="sh-body">
-      ${f.err ? `<p class="msg bad">Impossible de charger sa liste pour l’instant.</p>` : ''}
       ${reco.length ? `<div class="block"><h3>Ses recommandations</h3>${shelf(reco, () => ({}))}</div>` : ''}
       ${watching.length ? `<div class="block"><h3>En cours</h3>${shelf(watching, e => ({score:0, heart:false, sub: e.kind==='tv' && watchedTotal(e) ? plural(watchedTotal(e),'épisode vu','épisodes vus') : ''}))}</div>` : ''}
       ${done.length ? `<div class="block"><h3>Vus</h3>${shelf(done, () => ({}))}</div>` : ''}
       ${plan.length ? `<div class="block"><h3>À regarder</h3>${shelf(plan, () => ({score:0}))}</div>` : ''}
       ${!l.length ? `<p class="msg">Sa liste est vide pour l’instant.</p>` : ''}
-      <div class="links"><button class="btn small danger" type="button" data-unfollow="${uid}">Ne plus suivre</button></div>
+      <div class="links">${on ? `<button class="btn small danger" type="button" data-unfollow="${uid}">Ne plus suivre</button>` : `<button class="btn small primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Suivre</button>`}</div>
     </div>`;
 }
-function openSettings(){ lastFocus = document.activeElement; sheetId = 'settings'; showSheet(); $('#sheet').classList.remove('page'); renderSettings(); $('#sheet .sh-close').focus(); }
+function openSettings(){ lastFocus = document.activeElement; sheetId = 'settings'; showSheet(); $('#sheet').classList.remove('page'); renderSettings(); $('#sheet .sh-close').focus();
+  const missing = (profile.followers||[]).filter(uid => !pseudoCache.has(uid));
+  if (missing.length) Promise.all(missing.map(pseudoOf)).then(() => { if (sheetId==='settings') renderSettings(); }); }
 function renderSettings(){
   $('#sheet').innerHTML = `
     <button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button>
@@ -812,6 +883,12 @@ function renderSettings(){
       <div class="block"><h3>Mes plateformes</h3>
         <p class="note" style="margin-bottom:8px">Elles sont mises en avant sur chaque anime, et le filtre « Mes plateformes » s’en sert.</p>
         <div class="chk">${SERVICES.map(s=>`<label><input type="checkbox" data-plat="${s.key}" ${myPlatforms().includes(s.key)?'checked':''}>${esc(s.name)}</label>`).join('')}</div></div>
+      <div class="block"><h3>Confidentialité</h3>
+        <label class="check-line"><input type="checkbox" id="privateIn" ${isPrivate(profile)?'checked':''}> Profil privé</label>
+        <p class="note" style="margin-top:4px">${isPrivate(profile) ? 'Seules les personnes que tu acceptes voient ta liste, tes notes et tes avis. Les autres voient juste ton pseudo.' : 'Toute personne connectée au site peut voir ta liste, sans demande.'}</p></div>
+      <div class="block"><h3>Mes abonnés <span class="note" style="display:inline">(${(profile.followers||[]).length})</span></h3>
+        ${(profile.followers||[]).length ? `<div class="results" id="followersList">${(profile.followers||[]).map(uid => `<div class="res">${avatar(pseudoCache.get(uid)||'?')}<b>${esc(pseudoCache.get(uid)||'…')}</b><button class="btn small" type="button" data-rmfollower="${uid}">Retirer</button></div>`).join('')}</div>`
+          : `<p class="note">Personne ne voit encore ta liste. Les demandes que tu acceptes apparaissent ici.</p>`}</div>
       <div class="block"><h3>Mon pseudo</h3>${pseudoForm(profile.pseudo, false)}</div>
       <div class="block"><h3>Mon compte</h3>
         <p class="note" style="margin-bottom:8px">Connecté avec Google${me.name?` (${esc(me.name)})`:''}. Ta liste est enregistrée en ligne et la même sur tous tes appareils.</p>
@@ -845,8 +922,11 @@ document.addEventListener('click', async ev => {
   if (d.add){ const h = hits.get(d.add); addFrom(d.add, 'plan'); toast(`${h?h.t:'Anime'} ajouté à regarder`, 'Annuler', () => remove(d.add)); return; }
   if (d.open){ if (sheetId && !isAnimeKey(sheetId)) closeSheet(); openSheet(d.open); return; }
   if (d.close!==undefined){ closeSheet(); return; }
-  if (d.friend){ if (sheetId) closeSheet(); openFriend(d.friend); return; }
-  if (d.follow){ const [uid, p] = d.follow.split('|'); follow(uid, p); return; }
+  if (d.friend){ if (d.friend===me.uid) return; if (sheetId) closeSheet(); openFriend(d.friend); return; }
+  if (d.follow){ const [uid, p] = d.follow.split('|'); t.disabled = true; follow(uid, p); return; }
+  if (d.accept){ const r = requests.find(x => x.uid===d.accept); if (r){ t.disabled = true; acceptRequest(r); } return; }
+  if (d.decline){ const r = requests.find(x => x.uid===d.decline); if (r) declineRequest(r); return; }
+  if (d.rmfollower){ removeFollower(d.rmfollower, pseudoCache.get(d.rmfollower)||'Cette personne'); return; }
   if (d.unfollow){ unfollow(d.unfollow); return; }
   if (d.ep){ const [key, n, i] = d.ep.split('|'); const e = entries.get(key); const cur = e ? ((e.w||{})[+n]||0) : 0; setEp(key, +n, cur===+i ? +i-1 : +i); return; }
   if (d.plus){ plusOne(d.plus); return; }
@@ -887,6 +967,11 @@ document.addEventListener('change', ev => {
     disc.home = null; render();
   }
 });
+document.addEventListener('change', ev => {
+  if (ev.target.id!=='privateIn') return;
+  const val = ev.target.checked; profile.private = val; renderSettings();
+  Store.setProfile(me.uid, {pseudo:profile.pseudo, private:val}).then(() => toast(val ? 'Profil privé : seules les personnes acceptées voient ta liste' : 'Profil public : tout le monde peut voir ta liste')).catch(() => toast('Pas enregistré, réessaie.'));
+});
 document.addEventListener('submit', ev => { if (ev.target.id==='pseudoForm') submitPseudo(ev); });
 $('#scrim').addEventListener('click', () => closeSheet());
 document.addEventListener('visibilitychange', () => { if (document.visibilityState==='visible' && me && profile){ refreshDetails(); if (ui.tab==='friends') loadFriends(); render(); } });
@@ -905,16 +990,19 @@ function startList(){
   unsubList = Store.watchList(me.uid, m => { entries = m; listReady = true; render(); if (sheetId!=null && sheetId!=='pseudo' && !(document.activeElement && document.activeElement.id==='noteIn')) renderSheet(); refreshDetails(); },
     () => { listReady = true; toast('Impossible de lire ta liste : vérifie les règles Firestore.'); render(); });
   if (unsubProfile) unsubProfile();
-  if (Store.watchProfile) unsubProfile = Store.watchProfile(me.uid, p => { if (p && profile && JSON.stringify(p.following)!==JSON.stringify(profile.following)){ profile = {...profile, ...p}; loadFriends(); render(); } else if (p && profile) profile = {...profile, ...p}; });
+  if (Store.watchProfile) unsubProfile = Store.watchProfile(me.uid, p => { if (!p || !profile) return; const changed = JSON.stringify(p.following)!==JSON.stringify(profile.following); profile = {...profile, ...p}; if (changed) loadFriends(); render(); if (sheetId==='settings') renderSettings(); });
+  if (unsubReq) unsubReq();
+  if (Store.watchRequests) unsubReq = Store.watchRequests(me.uid, r => { requests = r.sort((a,b)=>(b.at||0)-(a.at||0)); render(); });
   loadFriends();
 }
+let unsubReq = null;
 async function start(){
   render();
   if (!CONFIG.firebase || !CONFIG.tmdbKey){ if (!window.MOCK_STORE){ Store = {}; render(); return; } }
   try{ Store = window.MOCK_STORE || await firebaseStore(CONFIG.firebase); }
   catch(e){ $('#main').innerHTML = `<p class="msg bad">Le site n’arrive pas à démarrer la connexion. Recharge la page.</p>`; return; }
   Store.onUser(async u => {
-    if (unsubList){ unsubList(); unsubList = null; } if (unsubProfile){ unsubProfile(); unsubProfile = null; }
+    if (unsubList){ unsubList(); unsubList = null; } if (unsubProfile){ unsubProfile(); unsubProfile = null; } if (unsubReq){ unsubReq(); unsubReq = null; } requests = [];
     me = u; profile = null; entries = new Map(); listReady = false; friends.clear();
     render();
     if (!u){ closeSheet(true); return; }
