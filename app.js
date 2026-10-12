@@ -297,7 +297,7 @@ function posterCard(key, m, opts={}){
   const newS = !opts.discover && !opts.friend && e && e.st==='done' && d && d.kind==='tv' && airedTotal(d) > watchedTotal(e) ? `<span class="s newseason">Nouveaux épisodes dispo</span>` : '';
   return `<div style="position:relative">
     <button class="poster" type="button" data-open="${key}">
-      <div class="cover">${m.poster?`<img src="${esc(IMG(m.poster))}" alt="" loading="lazy" decoding="async">`:''}${flag}${score}${heart}</div>
+      <div class="cover">${m.poster?`<img src="${esc(IMG(m.poster))}" alt="" loading="lazy" decoding="async">`:''}${flag}${score}${heart}${opts.cnt?`<span class="cnt">${esc(opts.cnt)}</span>`:''}</div>
       <span class="t">${esc(m.t)}</span>${opts.by?`<span class="by">${esc(opts.by)}</span>`:''}${newS || `<span class="s">${esc(opts.sub ?? subOf(m, e))}</span>`}${opts.discover||opts.friend?'':platBadges(m)}
     </button>${add}</div>`;
 }
@@ -464,6 +464,37 @@ async function runSearch(page=1){
   disc.loading = false; if (ui.tab==='discover' && disc.key===text) render();
 }
 const shelfOf = l => `<div class="shelf">${l.map(h => posterCard(h.key, h, {discover:true, sub:[h.kind==='movie'?'Film':'Série', h.yr].filter(Boolean).join(', ')})).join('')}</div>`;
+/* TMDB lists every film of a show as its own result: fold them under the show (or under the first film of the same name) */
+const fold = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+const baseName = s => fold(s).split(/\s[:：\-–]\s|[:：(（]/)[0].replace(/^(the|le|la|les)\s+/,'').replace(/[^a-z0-9\u3040-\u30ff\u4e00-\u9fff]+/g,' ').trim();
+const hasPhrase = (hay, needle) => needle.length>=4 && (' '+hay+' ').includes(' '+needle+' ');
+function sameStory(movie, show){
+  const mb = baseName(movie.t), mfull = fold(movie.t).replace(/[^a-z0-9]+/g,' ');
+  if ([baseName(show.t), baseName(show.ot)].some(sb => sb && (mb===sb || hasPhrase(sb, mb) || hasPhrase(mfull, sb)))) return true;
+  // a distinctive word of the show's name in the film's title ("The End of Evangelion")
+  return keyWords(show.t).some(w => hasPhrase(mfull, w));
+}
+const COMMON = new Set(['season','saison','movie','special','specials','story','stories','world','school','return','returns','project','legend','legends','chronicles','adventure','adventures','nouvelle','origins','rising','final','edition','episode','anime','series','monsters','academy','attack','dragon','hunter','knight','knights','princess','prince','heroes','battle','island','summer','winter','spring','autumn','memories','journey','animation','tokyo']);
+const keyWords = t => baseName(t).split(' ').filter(w => w.length>=6 && !COMMON.has(w) && !/^[0-9]+$/.test(w));
+const groupMembers = new Map();   // card shown -> films folded under it
+function groupHits(list){
+  const out = [], byKey = new Map();
+  for (const h of list){
+    if (h.kind==='movie'){
+      const host = out.find(g => (g.rep.kind==='tv' ? sameStory(h, g.rep) : baseName(g.rep.t).length>=4 && baseName(g.rep.t)===baseName(h.t)));
+      if (host){ host.films.push(h); continue; }
+    }
+    const g = {rep:h, films:[]}; out.push(g); byKey.set(h.key, g);
+  }
+  // a show listed after its films still collects them
+  for (const g of out.filter(g => g.rep.kind==='tv')){
+    for (const o of out) if (o!==g && o.rep.kind==='movie' && !o.taken && sameStory(o.rep, g.rep)){ g.films.push(o.rep, ...o.films); o.taken = true; }
+  }
+  const res = out.filter(g => !g.taken);
+  res.forEach(g => { if (g.films.length) groupMembers.set(g.rep.key, g.films); });
+  return res;
+}
+const groupedShelfOf = l => `<div class="shelf">${groupHits(l).map(g => posterCard(g.rep.key, g.rep, {discover:true, cnt: g.films.length ? `+ ${plural(g.films.length,'film','films')}` : '', sub:[g.rep.kind==='movie'?'Film':'Série', g.rep.yr].filter(Boolean).join(', ')})).join('')}</div>`;
 function discoverView(){
   const extra = q.trim() ? `<button class="toggle" type="button" id="animeOnly" aria-pressed="${ui.animeOnly}">Animes seulement</button>` : '';
   let body = '';
@@ -472,7 +503,7 @@ function discoverView(){
     else if (disc.loading && !disc.list.length) body = `<p class="msg">Recherche…</p>`;
     else {
       const l = ui.animeOnly ? disc.list.filter(h => h.anime) : disc.list, hidden = disc.list.length - l.length;
-      body = l.length ? shelfOf(l) : `<p class="msg">Aucun anime trouvé pour « ${esc(q.trim())} ».</p>`;
+      body = l.length ? groupedShelfOf(l) : `<p class="msg">Aucun anime trouvé pour « ${esc(q.trim())} ».</p>`;
       if (hidden && ui.animeOnly) body += `<p class="msg">${plural(hidden, 'autre résultat', 'autres résultats')} (films, séries, animation non japonaise). <button class="btn small" type="button" id="showAll">Les afficher</button></p>`;
       if (disc.more) body += `<div class="more"><button class="btn" type="button" id="moreRes">${disc.loading?'Chargement…':'Plus de résultats'}</button></div>`;
     }
@@ -610,7 +641,7 @@ async function loadRelated(key){
     if (d.kind==='movie' && d.coll){
       const c = await tmdb(`/collection/${d.coll.id}`);
       list = (c.parts||[]).map(x => normHit(x,'movie')).filter(h => h.key!==key);
-    } else if (d.kind==='tv'){
+    } else {
       const base = s => String(s||'').toLowerCase().split(/[:：\-–(]/)[0].replace(/\b(the|saison|season)\b.*$/,'').trim();
       const names = [...new Set([base(d.t), base(d.ot)].filter(s => s.length>=3))];
       const res = await Promise.all(names.map(nm => tmdb('/search/movie', {query:nm, include_adult:false}).catch(()=>({results:[]}))));
@@ -689,8 +720,9 @@ function seasonsBlock(key, d, e){
     }).join('')}</div></div>`;
 }
 function relatedBlock(key, d){
-  const list = relCache.get(key);
-  if (!list || !list.length) return '';
+  const seen = new Set([key]);
+  const list = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => !seen.has(h.key) && seen.add(h.key)).sort((a,b)=>(a.yr||'9999').localeCompare(b.yr||'9999'));
+  if (!list.length) return '';
   return `<div class="block"><h3>${d.kind==='tv'?'Films':'Dans la même série'}</h3>
     <div class="fam">${list.map(h => {
       const e = entries.get(h.key);
