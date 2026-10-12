@@ -917,7 +917,7 @@ function startPick(key){
 }
 function applyPick(){
   const {key, sel} = pick, d = dcache[key]; let e = entries.get(key); if (!d){ pick = null; return; }
-  const all = [...d.seasons, ...(d.specials && d.specials.eps ? [d.specials] : [])];
+  const all = [...d.seasons, ...(d.specials && d.specials.eps && showSpecials ? [d.specials] : [])];
   const w = {...((e && e.w)||{})};
   for (const s of all){
     const full = s.n===0 ? s.eps : (airedIn(d, s.n) || s.eps);
@@ -932,8 +932,10 @@ function applyPick(){
   pick = null; save(key, patch);
   toast(st==='done' ? 'Rangé dans Vus. Pense à le noter !' : sel.size ? `${plural(sel.size,'saison cochée','saisons cochées')}, rangé dans En cours` : 'Rien de coché');
 }
+let showSpecials = false;   // specials (season 0) stay folded unless asked for
 function seasonsBlock(key, d, e){
-  const all = [...d.seasons, ...(d.specials && d.specials.eps ? [d.specials] : [])];
+  const hasSp = !!(d.specials && d.specials.eps);
+  const all = [...d.seasons, ...(hasSp && showSpecials ? [d.specials] : [])];
   if (!all.length) return '';
   if (pick && pick.key===key){
     return `<div class="block picker" id="picker"><h3>Quelles saisons as-tu vues ?</h3>
@@ -966,7 +968,7 @@ function seasonsBlock(key, d, e){
         ${open ? (e ? pipsFor(key, d, e, s.n) : `<p class="note" style="padding:0 12px 12px">Coche « Marquer vue », ou ajoute l’anime à ta liste pour cocher épisode par épisode.</p>`) : ''}
       </div>`;
     }).join('')}</div>
-    <p class="note" style="margin-top:6px">Touche une saison pour cocher ses épisodes un par un.</p></div>`;
+    <p class="note" style="margin-top:6px">Touche une saison pour cocher ses épisodes un par un.${hasSp ? ` <button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Afficher les épisodes spéciaux (${d.specials.eps})`}</button>` : ''}</p></div>`;
 }
 function relatedBlock(key, d){
   const seen = new Set([key]);
@@ -1248,11 +1250,12 @@ document.addEventListener('click', async ev => {
   if (d.sall){ const [key, n, v] = d.sall.split('|'), dd = dcache[key];
     if (!entries.has(key)){ if (dd && dd.seasons.length<=1 && +n>0){ setStatus(key, 'done'); return; } addFrom(key, 'watching'); }
     setEp(key, +n, +v); return; }
+  if (d.specials!==undefined){ showSpecials = !showSpecials; renderSheet(); return; }
   if (d.picks!==undefined){ const n = +d.picks; pick.sel.has(n) ? pick.sel.delete(n) : pick.sel.add(n); renderSheet(); return; }
   if (d.pick){ const dd = pick && dcache[pick.key];
     if (d.pick==='ok') applyPick();
     else if (d.pick==='cancel'){ pick = null; renderSheet(); }
-    else if (dd){ pick.sel = d.pick==='all' ? new Set([...dd.seasons.filter(x => airedIn(dd, x.n)>0).map(x => x.n), ...(dd.specials&&dd.specials.eps?[0]:[])]) : new Set(); renderSheet(); }
+    else if (dd){ pick.sel = d.pick==='all' ? new Set([...dd.seasons.filter(x => airedIn(dd, x.n)>0).map(x => x.n), ...(dd.specials&&dd.specials.eps&&showSpecials?[0]:[])]) : new Set(); renderSheet(); }
     return; }
   if (d.season!==undefined){ openSeason = openSeason===+d.season ? null : +d.season; renderSheet(); return; }
   if (d.st){ const [key, st] = d.st.split('|');

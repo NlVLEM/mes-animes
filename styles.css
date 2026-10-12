@@ -432,3 +432,5 @@ button.pf-count[aria-expanded="true"]{border-color:var(--accent);background:var(
 .pick-row[aria-pressed="true"] .box{background:var(--avail);border-color:var(--avail);color:#fff}
 .pick-row .box svg{width:16px;height:16px}
 .pick-foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;margin-top:12px}
+.link-inline{all:unset;cursor:pointer;color:var(--accent);font-weight:700;text-decoration:underline;text-underline-offset:2px}
+.link-inline:focus-visible{outline:2px solid var(--accent);border-radius:4px}
