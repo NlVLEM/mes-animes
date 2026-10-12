@@ -17,6 +17,7 @@ const ICON = {
   close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>',
   search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
   back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
+  star:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z"/></svg>',
   lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
   heart:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-10-9.3C.4 8.4 2.3 4.5 6 4.1c2.2-.2 3.9 1 6 3.2 2.1-2.2 3.8-3.4 6-3.2 3.7.4 5.6 4.3 4 7.6C19.5 16.4 12 21 12 21z"/></svg>'
 };
@@ -36,7 +37,8 @@ const SERVICES = [
 const svcOf = name => SERVICES.find(s => s.re.test(name||''));
 const AVC = ['#D3245F','#14806F','#3B6FD9','#B8501B','#7A4CC2','#2E8B57','#C2417A','#3E7C99'];
 const avColor = s => AVC[[...String(s)].reduce((a,c)=>a+c.charCodeAt(0),0) % AVC.length];
-const avatar = (p, big) => `<span class="av${big?' big':''}" style="--avc:${avColor(p)}" aria-hidden="true">${esc(String(p||'?').slice(0,1).toUpperCase())}</span>`;
+const PCOLORS = ['#D3245F','#E8590C','#C99A06','#2E8B57','#14806F','#1C7ED6','#5F3DC4','#AE3EC9','#495057'];
+const avatar = (p, big, color) => `<span class="av${big?' big':big===0?'':''}" style="--avc:${esc(color||avColor(p))}" aria-hidden="true">${esc(String(p||'?').slice(0,1).toUpperCase())}</span>`;
 
 /* ---------- TMDB ---------- */
 const T = 'https://api.themoviedb.org/3';
@@ -264,7 +266,8 @@ async function loadPerson(uid){
   try{
     const p = await Store.getProfile(uid);
     if (!p){ friends.set(uid, {uid, pseudo:'?', status:'gone', list:new Map(), at:Date.now()}); return; }
-    const base = {uid, pseudo:p.pseudo, private:isPrivate(p), followsMe:(p.following||[]).includes(me.uid), list:new Map(), at:Date.now()};
+    const base = {uid, pseudo:p.pseudo, private:isPrivate(p), followsMe:(p.following||[]).includes(me.uid), list:new Map(), at:Date.now(),
+      bio:p.bio||'', color:p.color||'', banner:p.banner||'', nFollowers:(p.followers||[]).length, nFollowing:(p.following||[]).length};
     if (!isPrivate(p) || (p.followers||[]).includes(me.uid)){
       try{ friends.set(uid, {...base, status:'ok', list:await Store.getList(uid)}); }
       catch(e){ friends.set(uid, {...base, status:'refused'}); }
@@ -438,6 +441,7 @@ function render(){
   const main = $('#main');
   $('#nav').classList.toggle('off', !me || !profile);
   $('#openSettings').hidden = !me || !profile;
+  const mp = $('#myProfile'); mp.hidden = !me || !profile; if (profile) mp.innerHTML = `${avatar(profile.pseudo, false, profile.color)}<span>${esc(profile.pseudo)}</span>`;
   if (!Store){ return; }
   if (!me){ main.innerHTML = loginScreen(); $('#summary').textContent=''; return; }
   if (!profile){ main.innerHTML = `<p class="msg">Chargement de ton profil…</p>`; return; }
@@ -661,7 +665,7 @@ async function submitPseudo(ev){
   err.textContent = 'Vérification…';
   const first = !profile;
   try{
-    const keep = profile ? {platforms:profile.platforms||[], following:profile.following||[], followers:profile.followers||[], private:profile.private!==false} : {platforms:['crunchyroll','netflix'], following:[], followers:[], private:true};
+    const keep = profile ? {platforms:profile.platforms||[], following:profile.following||[], followers:profile.followers||[], private:profile.private!==false, ...(profile.bio?{bio:profile.bio}:{}), ...(profile.color?{color:profile.color}:{}), ...(profile.banner?{banner:profile.banner}:{})} : {platforms:['crunchyroll','netflix'], following:[], followers:[], private:true};
     await Store.claimPseudo(me.uid, v, profile && profile.pseudo, keep);
     profile = {...keep, ...(profile||{}), pseudo:v};
     if (first){ closeSheet(true); startList(); toast(`Bienvenue ${v} !`); setTimeout(followUrl, 0); }
@@ -676,11 +680,13 @@ const relCache = new Map();
 function showSheet(){ $('#scrim').hidden=false; $('#sheet').hidden=false; document.body.style.overflow='hidden'; }
 /* each anime has its own full-screen page with its own address (#/tv-1234), so the back button and shared links work */
 const isAnimeKey = k => /^(tv|movie)-\d+$/.test(String(k||''));
+const isPageKey = k => isAnimeKey(k) || String(k||'').startsWith('friend:');
+const urlOf = k => isAnimeKey(k) ? '#/'+k : '#/u/'+String(k).slice(7);
 let pushedPage = false, pageReturn = null;
 async function openSheet(key, fromUrl){
   if (sheetId!==key) openSeason = null;
-  if (!isAnimeKey(sheetId)) { lastFocus = document.activeElement; pageReturn = window.scrollY; }
-  if (!fromUrl && location.hash!=='#/'+key){ history.pushState({page:key}, '', '#/'+key); pushedPage = true; }
+  if (!isPageKey(sheetId)) { lastFocus = document.activeElement; pageReturn = window.scrollY; }
+  if (!fromUrl && location.hash!==urlOf(key)){ history.pushState({page:key}, '', urlOf(key)); pushedPage = true; }
   sheetId = key; showSheet(); $('#sheet').classList.add('page'); $('#sheet').scrollTop = 0;
   if (dcache[key]) renderSheet(); else $('#sheet').innerHTML = `${PAGE_BACK()}<p class="msg" style="padding:24px">Chargement…</p>`;
   const c = $('#sheet .page-back'); c && c.focus({preventScroll:true});
@@ -693,7 +699,7 @@ async function openSheet(key, fromUrl){
 const PAGE_BACK = () => `<div class="page-bar"><button class="page-back" type="button" data-close aria-label="Retour">${ICON.back} Retour</button></div>`;
 function closeSheet(force, fromUrl){
   if (sheetId==='pseudo' && !force) return;
-  const wasPage = isAnimeKey(sheetId);
+  const wasPage = isPageKey(sheetId);
   if (wasPage && !fromUrl && location.hash.startsWith('#/')){
     if (pushedPage){ pushedPage = false; history.back(); return; }   // the popstate below finishes closing
     history.replaceState(null, '', location.pathname + location.search);
@@ -703,10 +709,11 @@ function closeSheet(force, fromUrl){
   if (lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true});
 }
 function followUrl(){
-  const m = location.hash.match(/^#\/((?:tv|movie)-\d+)$/);
+  const m = location.hash.match(/^#\/((?:tv|movie)-\d+)$/), u = location.hash.match(/^#\/u\/([\w-]{6,64})$/);
   if (!me || !profile) return;
   if (m){ if (sheetId!==m[1]) openSheet(m[1], true); }
-  else if (isAnimeKey(sheetId)){ pushedPage = false; closeSheet(false, true); }
+  else if (u){ if (sheetId!=='friend:'+u[1]) openFriend(u[1], true); }
+  else if (isPageKey(sheetId)){ pushedPage = false; closeSheet(false, true); }
 }
 window.addEventListener('popstate', () => { if (!location.hash.startsWith('#/')) pushedPage = false; followUrl(); });
 // films that go with a show, and the other films of a movie series
@@ -748,7 +755,8 @@ function renderSheet(){
     you = `<div class="block"><h3>Ma liste</h3>
         <div class="seg" role="group" aria-label="Statut">${Object.entries(STATUS).map(([k,l])=>`<button type="button" data-st="${key}|${k}" aria-pressed="${e.st===k}">${l}</button>`).join('')}</div></div>
       <div class="block"><h3>Ma note</h3><div class="stars">${stars}</div></div>
-      <div class="block"><button class="reco" type="button" data-reco aria-pressed="${!!e.reco}">${ICON.heart} ${e.reco?'Tu le recommandes':'Je le recommande'}</button>
+      <div class="block"><div class="links"><button class="reco" type="button" data-reco aria-pressed="${!!e.reco}">${ICON.heart} ${e.reco?'Tu le recommandes':'Je le recommande'}</button>
+        <button class="reco" type="button" data-fav aria-pressed="${!!e.fav}">${ICON.star} ${e.fav?'Dans tes préférés':'Préféré'}</button></div>
         <p class="note" style="margin-top:6px">Tes abonnés le verront dans leurs recommandations.</p></div>
       <div class="block"><h3><label for="noteIn">Mon avis</label></h3><textarea id="noteIn" placeholder="Ce que tu en as pensé, ton épisode préféré, à qui le conseiller…">${esc(e.note)}</textarea>
         <p class="note" style="margin-top:4px">Visible par tes abonnés.</p></div>`;
@@ -838,39 +846,96 @@ function whereBlock(d){
     ${searchLinks.length ? `<div class="links" style="margin-top:10px">${searchLinks.map(s=>`<a class="btn small" href="${esc(s.search(d.t))}" target="_blank" rel="noopener">Chercher sur ${esc(s.name)}</a>`).join('')}</div>`:''}
     <p class="note" style="margin-top:8px">Dispos fournies par JustWatch.</p></div>`;
 }
-function openFriend(uid){ if (isAnimeKey(sheetId)) closeSheet(); lastFocus = document.activeElement; sheetId = 'friend:'+uid; showSheet(); $('#sheet').classList.remove('page'); renderFriend(uid); const c=$('#sheet .sh-close'); c&&c.focus();
-  if (uid!==me.uid && (!friends.has(uid) || friends.get(uid).status!=='ok' || Date.now()-friends.get(uid).at > 60e3)) loadPerson(uid).then(() => { if (sheetId==='friend:'+uid) renderFriend(uid); }); }
+/* profile pages (#/u/<id>): banner, avatar, bio, favourites and stats; the list part only for accepted followers */
+let editingProfile = false;
+function openFriend(uid, fromUrl){
+  if (!isPageKey(sheetId)) { lastFocus = document.activeElement; pageReturn = window.scrollY; }
+  const key = 'friend:'+uid;
+  if (!fromUrl && location.hash!==urlOf(key)){ history.pushState({page:key}, '', urlOf(key)); pushedPage = true; }
+  if (sheetId!==key) editingProfile = false;
+  sheetId = key; showSheet(); $('#sheet').classList.add('page'); $('#sheet').scrollTop = 0; renderFriend(uid);
+  const c = $('#sheet .page-back'); c && c.focus({preventScroll:true});
+  if (uid!==me.uid && (!friends.has(uid) || friends.get(uid).status!=='ok' || Date.now()-friends.get(uid).at > 60e3)) loadPerson(uid).then(() => { if (sheetId===key) renderFriend(uid); });
+  if (uid===me.uid) [...entries.keys()].filter(k => !dcache[k]).slice(0, 30).forEach(k => details(k).then(() => { if (sheetId===key && editingProfile) renderFriend(uid); }).catch(()=>{}));
+}
+function statsOf(list){
+  const all = [...list.values()];
+  const eps = all.reduce((s,e) => s + (e.kind==='tv' ? watchedTotal(e) : 0), 0);
+  const mins = all.reduce((s,e) => s + (e.kind==='tv' ? watchedTotal(e)*((e.m&&e.m.rt)||24) : (e.st==='done' ? (e.m&&e.m.rt)||100 : 0)), 0);
+  const scored = all.filter(e => e.score);
+  return {done:all.filter(e=>e.st==='done').length, watching:all.filter(e=>e.st==='watching').length, eps, hours:Math.round(mins/60),
+    avg: scored.length ? Math.round(scored.reduce((s,e)=>s+e.score,0)/scored.length*10)/10 : 0};
+}
 function renderFriend(uid){
-  const close = `<button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button>`;
-  const f = friends.get(uid);
-  if (!f){ $('#sheet').innerHTML = `${close}<p class="msg" style="padding:24px">Chargement…</p>`; return; }
+  const mine = uid===me.uid;
+  const f = mine ? {uid, pseudo:profile.pseudo, status:'ok', list:entries, bio:profile.bio||'', color:profile.color||'', banner:profile.banner||'',
+      nFollowers:(profile.followers||[]).length, nFollowing:following().length, private:isPrivate(profile)} : friends.get(uid);
+  if (!f){ $('#sheet').innerHTML = `${PAGE_BACK()}<p class="msg" style="padding:70px 24px">Chargement…</p>`; return; }
+  if (f.status==='gone'){ $('#sheet').innerHTML = `${PAGE_BACK()}<p class="msg" style="padding:70px 24px">Ce compte n’existe plus.</p>`; return; }
+  document.title = `${f.pseudo} · Mes Animes`;
   const on = following().includes(uid);
-  const head = (sub) => `<div class="fhead">${avatar(f.pseudo, true)}<div><h2 id="shTitle">${esc(f.pseudo)}</h2><p class="note">${sub}</p></div></div>`;
-  if (f.status==='gone'){ $('#sheet').innerHTML = `${close}<p class="msg" style="padding:24px">Ce compte n’existe plus.</p>`; return; }
+  const st = f.status==='ok' ? statsOf(f.list) : null;
+  const action = mine ? `<button class="btn small" type="button" id="editProfile">${editingProfile?'Fermer l’édition':'Modifier mon profil'}</button><button class="btn small" type="button" id="openSettings2">Réglages</button>`
+    : f.status==='ok' ? (on ? `<button class="btn small" type="button" data-unfollow="${uid}">Abonné</button>` : `<button class="btn small primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Suivre</button>`)
+    : f.status==='pending' ? `<button class="btn small" type="button" data-unfollow="${uid}">Demande envoyée</button>`
+    : `<button class="btn small primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Demander à suivre</button>`;
+  const counts = [`<b class="num">${f.nFollowers||0}</b> abonné${(f.nFollowers||0)>1?'s':''}`, `<b class="num">${f.nFollowing||0}</b> abonnement${(f.nFollowing||0)>1?'s':''}`];
+  const head = `
+    <div class="pf-banner" style="${f.banner?`background-image:url('${esc(IMG(f.banner,'w1280'))}')`:`--bc:${esc(f.color||avColor(f.pseudo))}`}"></div>
+    <div class="page-in">
+      <div class="pf-head">
+        ${avatar(f.pseudo, true, f.color)}
+        <div class="pf-id"><h2 id="shTitle">${esc(f.pseudo)}</h2>
+          <p class="note">${f.private?`${ICON.lock} Profil privé`:'Profil public'}${!mine && f.followsMe?', te suit':''}</p></div>
+        <div class="pf-act">${action}</div>
+      </div>
+      ${f.bio ? `<p class="pf-bio">${esc(f.bio)}</p>` : mine && !editingProfile ? `<p class="pf-bio note">Ajoute une petite bio avec « Modifier mon profil ».</p>` : ''}
+      <p class="pf-counts">${counts.map(c => `<span>${c}</span>`).join('')}</p>`;
+  let body = '';
+  if (mine && editingProfile) body += profileEditor();
   if (f.status!=='ok'){
-    const lock = f.status==='pending'
-      ? `<p class="note" style="font-size:14px">Ta demande est envoyée. Dès que ${esc(f.pseudo)} l’accepte, tu verras ce qu’il a vu, ses notes et ce qu’il recommande.</p>
-         <div class="links"><button class="btn small" type="button" disabled>Demande envoyée</button><button class="btn small danger" type="button" data-unfollow="${uid}">Annuler la demande</button></div>`
-      : `<p class="note" style="font-size:14px">Sa liste est privée. Envoie-lui une demande : s’il accepte, tu verras ce qu’il a vu, ses notes et ce qu’il recommande.</p>
-         <div class="links"><button class="btn primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Demander à suivre</button></div>`;
-    $('#sheet').innerHTML = `${close}${head(`Profil privé${f.followsMe?', te suit':''}`)}<div class="sh-body"><div class="private-box"><span class="lock" aria-hidden="true">${ICON.lock}</span>${lock}</div></div>`;
-    return;
-  }
-  const l = [...f.list.entries()].sort((a,b)=>(b[1].updated||0)-(a[1].updated||0));
-  const pick = st => l.filter(([,e]) => st==='done' ? e.st==='done' : e.st===st);
-  const shelf = (arr, opts) => `<div class="shelf">${arr.map(([k,e]) => posterCard(k, e.m||{t:'…'}, {friend:true, sub:'', score:e.score||0, heart:e.reco, ...opts(e)})).join('')}</div>`;
-  const reco = l.filter(([,e]) => e.reco), watching = pick('watching'), done = pick('done'), plan = pick('plan');
-  const common = l.filter(([k,e]) => e.st==='done' && entries.get(k) && entries.get(k).st==='done').length;
-  $('#sheet').innerHTML = `${close}
-    ${head(`${plural(done.length,'anime vu','animes vus')}, ${watching.length} en cours${common?`, ${common} en commun avec toi`:''}${f.followsMe?', te suit':''}`)}
-    <div class="sh-body">
-      ${reco.length ? `<div class="block"><h3>Ses recommandations</h3>${shelf(reco, () => ({}))}</div>` : ''}
+    body += `<div class="sh-body"><div class="private-box"><span class="lock" aria-hidden="true">${ICON.lock}</span>${f.status==='pending'
+      ? `<p class="note" style="font-size:14px">Ta demande est envoyée. Dès que ${esc(f.pseudo)} l’accepte, tu verras ses préférés, ce qu’il a vu, ses notes et ce qu’il recommande.</p><div class="links"><button class="btn small danger" type="button" data-unfollow="${uid}">Annuler la demande</button></div>`
+      : `<p class="note" style="font-size:14px">Sa liste est privée. Envoie-lui une demande : s’il accepte, tu verras ses préférés, ce qu’il a vu, ses notes et ce qu’il recommande.</p>`}</div></div>`;
+  } else {
+    const l = [...f.list.entries()].sort((a,b)=>(b[1].updated||0)-(a[1].updated||0));
+    const pick = s2 => l.filter(([,e]) => e.st===s2);
+    const shelf = (arr, opts) => `<div class="shelf">${arr.map(([k,e]) => posterCard(k, e.m||{t:'…'}, {friend:!mine, sub:'', score:e.score||0, heart:e.reco, ...opts(e)})).join('')}</div>`;
+    const favs = l.filter(([,e]) => e.fav).slice(0,4), reco = l.filter(([,e]) => e.reco), watching = pick('watching'), done = pick('done').sort((a,b)=>(b[1].score||0)-(a[1].score||0)), plan = pick('plan');
+    const common = mine ? 0 : l.filter(([k,e]) => e.st==='done' && entries.get(k) && entries.get(k).st==='done').length;
+    body += `<div class="sh-body">
+      ${favs.length ? `<div class="block"><h3>${mine?'Mes préférés':'Ses préférés'}</h3><div class="favs">${favs.map(([k,e]) => posterCard(k, e.m||{t:'…'}, {friend:true, sub:''})).join('')}</div></div>`
+        : mine ? `<p class="note">Choisis tes 4 animes préférés avec le bouton « Préféré » sur leur page : ils s’afficheront en haut de ton profil.</p>` : ''}
+      ${st && (st.eps||st.done) ? `<div class="pf-stats">
+        <div><b class="num">${st.done}</b><span>animes vus</span></div><div><b class="num">${st.watching}</b><span>en cours</span></div>
+        <div><b class="num">${st.eps.toLocaleString('fr-FR')}</b><span>épisodes</span></div><div><b class="num">${st.hours.toLocaleString('fr-FR')} h</b><span>devant l’écran</span></div>
+        ${st.avg?`<div><b class="num">${st.avg.toLocaleString('fr-FR')}</b><span>note moyenne</span></div>`:''}${common?`<div><b class="num">${common}</b><span>en commun avec toi</span></div>`:''}</div>` : ''}
+      ${reco.length ? `<div class="block"><h3>${mine?'Mes recommandations':'Ses recommandations'}</h3>${shelf(reco, () => ({}))}</div>` : ''}
       ${watching.length ? `<div class="block"><h3>En cours</h3>${shelf(watching, e => ({score:0, heart:false, sub: e.kind==='tv' && watchedTotal(e) ? plural(watchedTotal(e),'épisode vu','épisodes vus') : ''}))}</div>` : ''}
       ${done.length ? `<div class="block"><h3>Vus</h3>${shelf(done, () => ({}))}</div>` : ''}
       ${plan.length ? `<div class="block"><h3>À regarder</h3>${shelf(plan, () => ({score:0}))}</div>` : ''}
-      ${!l.length ? `<p class="msg">Sa liste est vide pour l’instant.</p>` : ''}
-      <div class="links">${on ? `<button class="btn small danger" type="button" data-unfollow="${uid}">Ne plus suivre</button>` : `<button class="btn small primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Suivre</button>`}</div>
+      ${!l.length ? `<p class="msg">${mine?'Ta liste est vide pour l’instant.':'Sa liste est vide pour l’instant.'}</p>` : ''}
     </div>`;
+  }
+  const keep = $('#sheet').scrollTop;
+  $('#sheet').innerHTML = `${PAGE_BACK()}${head}${body}</div>`;
+  $('#sheet').scrollTop = keep;
+}
+function profileEditor(){
+  const banners = [...entries.keys()].map(k => dcache[k]).filter(d => d && d.back);
+  return `<div class="sh-body"><div class="pf-edit">
+    <div class="block"><h3><label for="bioIn">Bio</label></h3>
+      <textarea id="bioIn" maxlength="160" placeholder="Ce que tu aimes regarder, ton anime de cœur, tes plateformes…">${esc(profile.bio||'')}</textarea>
+      <p class="note"><span id="bioCount">${(profile.bio||'').length}</span>/160</p></div>
+    <div class="block"><h3>Couleur de l’avatar</h3><div class="swatches">${PCOLORS.map(c => `<button type="button" class="sw${(profile.color||avColor(profile.pseudo))===c?' on':''}" style="--sw:${c}" data-color="${c}" aria-label="Couleur ${c}" aria-pressed="${(profile.color||avColor(profile.pseudo))===c}"></button>`).join('')}</div></div>
+    <div class="block"><h3>Bannière</h3>
+      ${banners.length ? `<div class="banners"><button type="button" class="bn none${!profile.banner?' on':''}" data-banner="" aria-pressed="${!profile.banner}">Aucune</button>${banners.map(d => `<button type="button" class="bn${profile.banner===d.back?' on':''}" data-banner="${esc(d.back)}" aria-pressed="${profile.banner===d.back}" aria-label="${esc(d.t)}" style="background-image:url('${esc(IMG(d.back,'w300'))}')"></button>`).join('')}</div>`
+        : `<p class="note">Ajoute des animes à ta liste : leurs images pourront servir de bannière.</p>`}</div>
+  </div></div>`;
+}
+function saveProfileField(patch, msg){
+  Object.assign(profile, patch);
+  Store.setProfile(me.uid, {pseudo:profile.pseudo, ...patch}).then(() => msg && toast(msg)).catch(() => toast('Pas enregistré, réessaie.'));
 }
 function openSettings(){ lastFocus = document.activeElement; sheetId = 'settings'; showSheet(); $('#sheet').classList.remove('page'); renderSettings(); $('#sheet .sh-close').focus();
   const missing = (profile.followers||[]).filter(uid => !pseudoCache.has(uid));
@@ -920,9 +985,9 @@ document.addEventListener('click', async ev => {
   if (d.tab){ ui.tab = d.tab; q=''; saveUi(); render(); window.scrollTo({top:0}); return; }
   if (d.go){ ui.tab = d.go; q=''; saveUi(); render(); const i=$('#q'); i && i.focus(); return; }
   if (d.add){ const h = hits.get(d.add); addFrom(d.add, 'plan'); toast(`${h?h.t:'Anime'} ajouté à regarder`, 'Annuler', () => remove(d.add)); return; }
-  if (d.open){ if (sheetId && !isAnimeKey(sheetId)) closeSheet(); openSheet(d.open); return; }
+  if (d.open){ if (sheetId && !isPageKey(sheetId)) closeSheet(); openSheet(d.open); return; }
   if (d.close!==undefined){ closeSheet(); return; }
-  if (d.friend){ if (d.friend===me.uid) return; if (sheetId) closeSheet(); openFriend(d.friend); return; }
+  if (d.friend){ if (sheetId && !isPageKey(sheetId)) closeSheet(); openFriend(d.friend); return; }
   if (d.follow){ const [uid, p] = d.follow.split('|'); t.disabled = true; follow(uid, p); return; }
   if (d.accept){ const r = requests.find(x => x.uid===d.accept); if (r){ t.disabled = true; acceptRequest(r); } return; }
   if (d.decline){ const r = requests.find(x => x.uid===d.decline); if (r) declineRequest(r); return; }
@@ -935,6 +1000,14 @@ document.addEventListener('click', async ev => {
   if (d.st){ const [key, st] = d.st.split('|'); setStatus(key, st); if (st==='done' && ui.tab==='watching' && sheetId==null) toast('Rangé dans Vus. Pense à le noter !', 'Noter', () => openSheet(key)); return; }
   if (d.score){ const s = +d.score, e = entries.get(sheetId); if (e) save(sheetId, {score: e.score===s ? 0 : s}); return; }
   if (d.reco!==undefined){ const e = entries.get(sheetId); if (e) save(sheetId, {reco:!e.reco}); return; }
+  if (d.fav!==undefined){ const e = entries.get(sheetId); if (!e) return;
+    if (!e.fav && [...entries.values()].filter(x => x.fav).length>=4){ toast('4 préférés maximum : retire-en un pour ajouter celui-ci.'); return; }
+    save(sheetId, {fav:!e.fav}); toast(e.fav ? 'Retiré de tes préférés' : 'Ajouté à tes préférés, en haut de ton profil'); return; }
+  if (d.color){ saveProfileField({color:d.color}); renderFriend(me.uid); return; }
+  if (d.banner!==undefined){ saveProfileField({banner:d.banner}, 'Bannière enregistrée'); renderFriend(me.uid); return; }
+  if (t.id==='editProfile'){ editingProfile = !editingProfile; renderFriend(me.uid); return; }
+  if (t.id==='openSettings2'){ closeSheet(); setTimeout(openSettings, 0); return; }
+  if (t.id==='myProfile'){ if (me && profile){ if (sheetId && !isPageKey(sheetId)) closeSheet(); openFriend(me.uid); } return; }
   if (d.remove){ closeSheet(); remove(d.remove); return; }
   if (t.id==='mine'){ ui.mine = !ui.mine; saveUi(); render(); return; }
   if (t.id==='animeOnly' || t.id==='showAll'){ ui.animeOnly = t.id==='showAll' ? false : !ui.animeOnly; saveUi(); render(); return; }
@@ -955,6 +1028,7 @@ document.addEventListener('input', ev => {
     else render();
   }
   if (t.id==='fq'){ fq = t.value; clearTimeout(fT); if (fq.trim().length<2){ fres=null; render(); } else fT = setTimeout(runFriendSearch, 350); }
+  if (t.id==='bioIn'){ $('#bioCount').textContent = t.value.length; clearTimeout(t._t); const v = t.value.slice(0,160); t._t = setTimeout(() => saveProfileField({bio:v}), 800); }
   if (t.id==='noteIn'){ const e = entries.get(sheetId); if (e){ e.note = t.value; clearTimeout(t._t); const key = sheetId, v = t.value; t._t = setTimeout(() => save(key, {note:v}, {quiet:true}), 700); } }
 });
 document.addEventListener('change', ev => {
@@ -987,7 +1061,7 @@ async function refreshDetails(){
 }
 function startList(){
   if (unsubList) unsubList();
-  unsubList = Store.watchList(me.uid, m => { entries = m; listReady = true; render(); if (sheetId!=null && sheetId!=='pseudo' && !(document.activeElement && document.activeElement.id==='noteIn')) renderSheet(); refreshDetails(); },
+  unsubList = Store.watchList(me.uid, m => { entries = m; listReady = true; render(); if (sheetId!=null && sheetId!=='pseudo' && !(document.activeElement && ['noteIn','bioIn'].includes(document.activeElement.id))) renderSheet(); refreshDetails(); },
     () => { listReady = true; toast('Impossible de lire ta liste : vérifie les règles Firestore.'); render(); });
   if (unsubProfile) unsubProfile();
   if (Store.watchProfile) unsubProfile = Store.watchProfile(me.uid, p => { if (!p || !profile) return; const changed = JSON.stringify(p.following)!==JSON.stringify(profile.following); profile = {...profile, ...p}; if (changed) loadFriends(); render(); if (sheetId==='settings') renderSettings(); });
