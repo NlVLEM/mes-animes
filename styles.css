@@ -262,3 +262,25 @@ textarea{width:100%;min-height:72px;border:1px solid var(--line);background:var(
 @media (min-width:1400px){.sheet{width:720px}}
 .ft{-webkit-line-clamp:unset;display:block}
 .sh-head{grid-template-columns:120px minmax(0,1fr)}
+/* anime page: full screen, one simple centred column */
+.sheet.page{inset:0;width:auto;max-height:none;border-radius:0;box-shadow:none;animation:pageIn .18s ease-out}
+@keyframes pageIn{from{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.sheet.page{animation:none}}
+.page-bar{position:sticky;top:0;z-index:3;height:0}
+.page-back{margin:calc(10px + env(safe-area-inset-top,0px)) 0 0 max(12px,env(safe-area-inset-left,0px));height:40px;padding:0 14px 0 8px;border-radius:999px;border:0;display:inline-flex;align-items:center;gap:4px;font-weight:700;font-size:14px;
+  background:color-mix(in srgb,var(--surface) 88%,transparent);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-shadow:0 1px 4px rgba(0,0,0,.2)}
+.page-back svg{width:20px;height:20px}
+.sheet.page .sh-hero{height:clamp(150px,28vw,300px)}
+.page-in{max-width:880px;margin:0 auto}
+.sheet.page .sh-head{grid-template-columns:clamp(104px,18vw,170px) minmax(0,1fr);margin-top:clamp(-120px,-12vw,-70px);padding:0 18px}
+.sheet.page .sh-head h2{margin-top:clamp(74px,12vw,124px);font-size:clamp(21px,3.2vw,32px)}
+.page-cols{display:block}
+.page-cols .sh-body.side{padding-top:0}
+.sheet.page .sh-body{padding-bottom:20px}
+.sheet.page .page-cols .side{padding-bottom:calc(40px + env(safe-area-inset-bottom,0px))}
+@media (min-width:760px){.sheet.page .seasons{grid-template-columns:repeat(2,minmax(0,1fr))}.sheet.page .sh-body{padding-left:24px;padding-right:24px}.sheet.page .sh-head{padding:0 24px}}
+.head-facts{display:grid;gap:8px;grid-column:2;min-width:0;margin-top:-6px}
+@media (max-width:620px){.head-facts{grid-column:1/-1;margin-top:6px}}
+.sheet.page .sh-head{align-items:end;row-gap:8px}
+@media (max-width:620px){.sheet.page .sh-head{align-items:end}}
+@media (min-width:621px){.sheet.page .sh-head{align-items:start}.sheet.page .sh-head > .cover{grid-row:span 2}.sheet.page .sh-head h2{margin-top:clamp(74px,11vw,118px)}.head-facts{margin-top:0;align-self:start}}

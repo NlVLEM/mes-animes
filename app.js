@@ -16,6 +16,7 @@ const ICON = {
   check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>',
   close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>',
   search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
+  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
   heart:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-10-9.3C.4 8.4 2.3 4.5 6 4.1c2.2-.2 3.9 1 6 3.2 2.1-2.2 3.8-3.4 6-3.2 3.7.4 5.6 4.3 4 7.6C19.5 16.4 12 21 12 21z"/></svg>'
 };
 const plural = (n, one, many) => `${n} ${n>1?many:one}`;
@@ -132,7 +133,7 @@ function currentSeason(d, e){
 
 /* ---------- data store: Firebase, or a stand-in for tests ---------- */
 async function firebaseStore(cfg){
-  const fb = await import('./firebase.js');
+  const fb = await import('./firebase.js?v=1');
   const app = fb.initializeApp(cfg);
   const auth = fb.getAuth(app);
   await fb.setPersistence(auth, fb.browserLocalPersistence).catch(()=>{});
@@ -605,7 +606,7 @@ async function submitPseudo(ev){
     const keep = profile ? {platforms:profile.platforms||[], following:profile.following||[]} : {platforms:['crunchyroll','netflix'], following:[]};
     await Store.claimPseudo(me.uid, v, profile && profile.pseudo, keep);
     profile = {...keep, ...(profile||{}), pseudo:v};
-    if (first){ closeSheet(true); startList(); toast(`Bienvenue ${v} !`); }
+    if (first){ closeSheet(true); startList(); toast(`Bienvenue ${v} !`); setTimeout(followUrl, 0); }
     else { renderSettings(); toast('Pseudo changé'); }
     render();
   }catch(e){ err.textContent = e && e.message==='taken' ? 'Ce pseudo est déjà pris, essaie une variante.' : 'Impossible d’enregistrer le pseudo, vérifie ta connexion.'; }
@@ -615,22 +616,41 @@ async function submitPseudo(ev){
 let sheetId = null, lastFocus = null, openSeason = null;
 const relCache = new Map();
 function showSheet(){ $('#scrim').hidden=false; $('#sheet').hidden=false; document.body.style.overflow='hidden'; }
-async function openSheet(key){
+/* each anime has its own full-screen page with its own address (#/tv-1234), so the back button and shared links work */
+const isAnimeKey = k => /^(tv|movie)-\d+$/.test(String(k||''));
+let pushedPage = false, pageReturn = null;
+async function openSheet(key, fromUrl){
   if (sheetId!==key) openSeason = null;
-  lastFocus = document.activeElement; sheetId = key; showSheet();
-  if (dcache[key]) renderSheet(); else $('#sheet').innerHTML = `<button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button><p class="msg" style="padding:24px">Chargement…</p>`;
-  const c = $('#sheet .sh-close'); c && c.focus();
+  if (!isAnimeKey(sheetId)) { lastFocus = document.activeElement; pageReturn = window.scrollY; }
+  if (!fromUrl && location.hash!=='#/'+key){ history.pushState({page:key}, '', '#/'+key); pushedPage = true; }
+  sheetId = key; showSheet(); $('#sheet').classList.add('page'); $('#sheet').scrollTop = 0;
+  if (dcache[key]) renderSheet(); else $('#sheet').innerHTML = `${PAGE_BACK()}<p class="msg" style="padding:24px">Chargement…</p>`;
+  const c = $('#sheet .page-back'); c && c.focus({preventScroll:true});
   if (!fresh(dcache[key])){
     try{ await details(key, true); if (sheetId===key) renderSheet(); }
-    catch(e){ if (sheetId===key && !dcache[key]) $('#sheet').innerHTML = `<button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button><p class="msg bad" style="padding:24px">${esc(e.message)}</p>`; }
+    catch(e){ if (sheetId===key && !dcache[key]) $('#sheet').innerHTML = `${PAGE_BACK()}<p class="msg bad" style="padding:24px">${esc(e.message)}</p>`; }
   }
   loadRelated(key);
 }
-function closeSheet(force){
+const PAGE_BACK = () => `<div class="page-bar"><button class="page-back" type="button" data-close aria-label="Retour">${ICON.back} Retour</button></div>`;
+function closeSheet(force, fromUrl){
   if (sheetId==='pseudo' && !force) return;
-  sheetId = null; $('#scrim').hidden = true; $('#sheet').hidden = true; $('#sheet').innerHTML=''; document.body.style.overflow='';
-  if (lastFocus && document.contains(lastFocus)) lastFocus.focus();
+  const wasPage = isAnimeKey(sheetId);
+  if (wasPage && !fromUrl && location.hash.startsWith('#/')){
+    if (pushedPage){ pushedPage = false; history.back(); return; }   // the popstate below finishes closing
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+  sheetId = null; document.title = 'Mes Animes'; $('#scrim').hidden = true; $('#sheet').hidden = true; $('#sheet').innerHTML=''; $('#sheet').classList.remove('page'); document.body.style.overflow='';
+  if (wasPage && pageReturn!=null) window.scrollTo({top:pageReturn});
+  if (lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll:true});
 }
+function followUrl(){
+  const m = location.hash.match(/^#\/((?:tv|movie)-\d+)$/);
+  if (!me || !profile) return;
+  if (m){ if (sheetId!==m[1]) openSheet(m[1], true); }
+  else if (isAnimeKey(sheetId)){ pushedPage = false; closeSheet(false, true); }
+}
+window.addEventListener('popstate', () => { if (!location.hash.startsWith('#/')) pushedPage = false; followUrl(); });
 // films that go with a show, and the other films of a movie series
 async function loadRelated(key){
   if (relCache.has(key)) return;
@@ -680,22 +700,29 @@ function renderSheet(){
       <button class="btn" type="button" data-st="${key}|watching">Je le regarde</button>
       <button class="btn" type="button" data-st="${key}|done">${ICON.check} Déjà vu</button></div></div>`;
   }
+  const keepScroll = $('#sheet').scrollTop;
+  document.title = `${d.t} · Mes Animes`;
   $('#sheet').innerHTML = `
-    <button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button>
-    <div class="sh-hero" style="${d.back?`background-image:url('${esc(IMG(d.back,'w780'))}')`:''}"></div>
-    <div class="sh-head"><div class="cover">${d.poster?`<img src="${esc(IMG(d.poster))}" alt="">`:''}</div>
-      <div style="min-width:0"><h2 id="shTitle">${esc(d.t)}</h2>${d.ot && d.ot!==d.t ? `<div class="alt">${esc(d.ot)}</div>`:''}</div></div>
-    <div class="sh-body">
-      <div class="facts">${facts.map(f=>`<span class="fact">${esc(f)}</span>`).join('')}${d.genres.map(g=>`<span class="fact">${esc(g)}</span>`).join('')}</div>
-      ${nextLine(d)}
-      ${d.kind==='tv' ? seasonsBlock(key, d, e) : ''}
-      ${relatedBlock(key, d)}
-      ${you}
-      ${friendsBlock(key)}
-      ${whereBlock(d)}
-      ${d.ov ? `<div class="block"><h3>Résumé${d.ovEn?' <span class="note" style="display:inline">(en anglais, pas encore traduit)</span>':''}</h3><p class="syn">${esc(d.ov)}</p></div>`:''}
-      <div class="links"><a class="btn small" href="https://www.themoviedb.org/${d.kind}/${d.id}?language=fr" target="_blank" rel="noopener">Fiche TMDB</a>${e?`<button class="btn small danger" type="button" data-remove="${key}">Retirer de ma liste</button>`:''}</div>
-    </div>`;
+    ${PAGE_BACK()}
+    <div class="sh-hero" style="${d.back?`background-image:url('${esc(IMG(d.back,'w1280'))}')`:''}"></div>
+    <div class="page-in">
+    <div class="sh-head"><div class="cover">${d.poster?`<img src="${esc(IMG(d.poster,'w500'))}" alt="">`:''}</div>
+      <div style="min-width:0"><h2 id="shTitle">${esc(d.t)}</h2>${d.ot && d.ot!==d.t ? `<div class="alt">${esc(d.ot)}</div>`:''}</div>
+      <div class="head-facts"><div class="facts">${facts.map(f=>`<span class="fact">${esc(f)}</span>`).join('')}${d.genres.map(g=>`<span class="fact">${esc(g)}</span>`).join('')}</div>${nextLine(d)}</div></div>
+    <div class="page-cols">
+      <div class="sh-body">
+        ${d.kind==='tv' ? seasonsBlock(key, d, e) : ''}
+        ${relatedBlock(key, d)}
+      </div>
+      <div class="sh-body side">
+        ${you}
+        ${friendsBlock(key)}
+        ${whereBlock(d)}
+        ${d.ov ? `<div class="block"><h3>Résumé${d.ovEn?' <span class="note" style="display:inline">(en anglais, pas encore traduit)</span>':''}</h3><p class="syn">${esc(d.ov)}</p></div>`:''}
+        <div class="links"><a class="btn small" href="https://www.themoviedb.org/${d.kind}/${d.id}?language=fr" target="_blank" rel="noopener">Fiche TMDB</a>${e?`<button class="btn small danger" type="button" data-remove="${key}">Retirer de ma liste</button>`:''}</div>
+      </div>
+    </div></div>`;
+  $('#sheet').scrollTop = keepScroll;
 }
 function seasonsBlock(key, d, e){
   const all = [...d.seasons, ...(d.specials && d.specials.eps ? [d.specials] : [])];
@@ -753,7 +780,7 @@ function whereBlock(d){
     ${searchLinks.length ? `<div class="links" style="margin-top:10px">${searchLinks.map(s=>`<a class="btn small" href="${esc(s.search(d.t))}" target="_blank" rel="noopener">Chercher sur ${esc(s.name)}</a>`).join('')}</div>`:''}
     <p class="note" style="margin-top:8px">Dispos fournies par JustWatch.</p></div>`;
 }
-function openFriend(uid){ lastFocus = document.activeElement; sheetId = 'friend:'+uid; showSheet(); renderFriend(uid); const c=$('#sheet .sh-close'); c&&c.focus(); }
+function openFriend(uid){ if (isAnimeKey(sheetId)) closeSheet(); lastFocus = document.activeElement; sheetId = 'friend:'+uid; showSheet(); $('#sheet').classList.remove('page'); renderFriend(uid); const c=$('#sheet .sh-close'); c&&c.focus(); }
 function renderFriend(uid){
   const f = friends.get(uid);
   if (!f){ $('#sheet').innerHTML = `<button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button><p class="msg" style="padding:24px">Chargement…</p>`; loadFriends(); return; }
@@ -776,7 +803,7 @@ function renderFriend(uid){
       <div class="links"><button class="btn small danger" type="button" data-unfollow="${uid}">Ne plus suivre</button></div>
     </div>`;
 }
-function openSettings(){ lastFocus = document.activeElement; sheetId = 'settings'; showSheet(); renderSettings(); $('#sheet .sh-close').focus(); }
+function openSettings(){ lastFocus = document.activeElement; sheetId = 'settings'; showSheet(); $('#sheet').classList.remove('page'); renderSettings(); $('#sheet .sh-close').focus(); }
 function renderSettings(){
   $('#sheet').innerHTML = `
     <button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button>
@@ -816,7 +843,7 @@ document.addEventListener('click', async ev => {
   if (d.tab){ ui.tab = d.tab; q=''; saveUi(); render(); window.scrollTo({top:0}); return; }
   if (d.go){ ui.tab = d.go; q=''; saveUi(); render(); const i=$('#q'); i && i.focus(); return; }
   if (d.add){ const h = hits.get(d.add); addFrom(d.add, 'plan'); toast(`${h?h.t:'Anime'} ajouté à regarder`, 'Annuler', () => remove(d.add)); return; }
-  if (d.open){ openSheet(d.open); return; }
+  if (d.open){ if (sheetId && !isAnimeKey(sheetId)) closeSheet(); openSheet(d.open); return; }
   if (d.close!==undefined){ closeSheet(); return; }
   if (d.friend){ if (sheetId) closeSheet(); openFriend(d.friend); return; }
   if (d.follow){ const [uid, p] = d.follow.split('|'); follow(uid, p); return; }
@@ -893,7 +920,7 @@ async function start(){
     if (!u){ closeSheet(true); return; }
     try{ profile = await Store.getProfile(u.uid); }catch(e){ profile = null; }
     if (!profile || !profile.pseudo){ profile = null; render(); openPseudo(); return; }
-    render(); startList();
+    render(); startList(); followUrl();
   });
 }
 start();
