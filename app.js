@@ -38,7 +38,24 @@ const svcOf = name => SERVICES.find(s => s.re.test(name||''));
 const AVC = ['#D3245F','#14806F','#3B6FD9','#B8501B','#7A4CC2','#2E8B57','#C2417A','#3E7C99'];
 const avColor = s => AVC[[...String(s)].reduce((a,c)=>a+c.charCodeAt(0),0) % AVC.length];
 const PCOLORS = ['#D3245F','#E8590C','#C99A06','#2E8B57','#14806F','#1C7ED6','#5F3DC4','#AE3EC9','#495057'];
-const avatar = (p, big, color) => `<span class="av${big?' big':big===0?'':''}" style="--avc:${esc(color||avColor(p))}" aria-hidden="true">${esc(String(p||'?').slice(0,1).toUpperCase())}</span>`;
+const okImg = s => typeof s==='string' && /^data:image\/(webp|jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(s);
+const avatar = (p, big, color, photo) => `<span class="av${big?' big':''}${okImg(photo)?' ph':''}" style="--avc:${esc(color||avColor(p))}" aria-hidden="true">${okImg(photo) ? `<img src="${photo}" alt="">` : esc(String(p||'?').slice(0,1).toUpperCase())}</span>`;
+// pictures chosen from the phone or computer: cropped and compressed here, then stored with the profile (no paid file storage needed)
+async function shrinkImage(file, w, h, maxChars){
+  if (!file || !/^image\//.test(file.type)) throw new Error('Choisis une image (JPG, PNG, WebP…).');
+  let bmp;
+  try{ bmp = await createImageBitmap(file); }
+  catch(e){ bmp = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ko(new Error('Cette image ne s’ouvre pas, essaie une autre.')); i.src = URL.createObjectURL(file); }); }
+  const sw = bmp.width, sh = bmp.height, r = Math.max(w/sw, h/sh), cw = w/r, ch = h/r;
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  c.getContext('2d').drawImage(bmp, (sw-cw)/2, (sh-ch)/2, cw, ch, 0, 0, w, h);
+  const webp = c.toDataURL('image/webp', .8).startsWith('data:image/webp');
+  for (const q of [.82, .7, .58, .46, .34]){
+    const url = c.toDataURL(webp ? 'image/webp' : 'image/jpeg', q);
+    if (url.length <= maxChars) return url;
+  }
+  throw new Error('Image trop lourde, essaie une autre.');
+}
 
 /* ---------- TMDB ---------- */
 const T = 'https://api.themoviedb.org/3';
@@ -181,6 +198,8 @@ async function firebaseStore(cfg){
     sendRequest: (target, from, pseudo) => fb.setDoc(fb.doc(db, 'users', target, 'requests', from), {pseudo, at:Date.now()}),
     cancelRequest: (target, from) => fb.deleteDoc(fb.doc(db, 'users', target, 'requests', from)),
     async hasRequest(target, from){ try{ return (await fb.getDoc(fb.doc(db, 'users', target, 'requests', from))).exists(); }catch(e){ return false; } },
+    async getImages(uid){ try{ const s = await fb.getDoc(fb.doc(db, 'images', uid)); return s.exists() ? s.data() : {}; }catch(e){ return {}; } },
+    setImages: (uid, data) => fb.setDoc(fb.doc(db, 'images', uid), {...data, at:Date.now()}),
     watchRequests: (uid, cb) => fb.onSnapshot(fb.collection(db, 'users', uid, 'requests'), s => cb(s.docs.map(d => ({uid:d.id, ...d.data()}))), () => {}),
     async acceptRequest(uid, from){ const b = fb.writeBatch(db); b.update(fb.doc(db, 'users', uid), {followers:fb.arrayUnion(from), updated:Date.now()}); b.delete(fb.doc(db, 'users', uid, 'requests', from)); await b.commit(); },
     declineRequest: (uid, from) => fb.deleteDoc(fb.doc(db, 'users', uid, 'requests', from)),
@@ -267,7 +286,7 @@ async function loadPerson(uid){
     const p = await Store.getProfile(uid);
     if (!p){ friends.set(uid, {uid, pseudo:'?', status:'gone', list:new Map(), at:Date.now()}); return; }
     const base = {uid, pseudo:p.pseudo, private:isPrivate(p), followsMe:(p.following||[]).includes(me.uid), list:new Map(), at:Date.now(),
-      bio:p.bio||'', color:p.color||'', banner:p.banner||'', nFollowers:(p.followers||[]).length, nFollowing:(p.following||[]).length};
+      bio:p.bio||'', color:p.color||'', banner:p.banner||'', photo:p.photo||'', nFollowers:(p.followers||[]).length, nFollowing:(p.following||[]).length};
     if (!isPrivate(p) || (p.followers||[]).includes(me.uid)){
       try{ friends.set(uid, {...base, status:'ok', list:await Store.getList(uid)}); }
       catch(e){ friends.set(uid, {...base, status:'refused'}); }
@@ -441,7 +460,7 @@ function render(){
   const main = $('#main');
   $('#nav').classList.toggle('off', !me || !profile);
   $('#openSettings').hidden = !me || !profile;
-  const mp = $('#myProfile'); mp.hidden = !me || !profile; if (profile) mp.innerHTML = `${avatar(profile.pseudo, false, profile.color)}<span>${esc(profile.pseudo)}</span>`;
+  const mp = $('#myProfile'); mp.hidden = !me || !profile; if (profile) mp.innerHTML = `${avatar(profile.pseudo, false, profile.color, profile.photo)}<span>${esc(profile.pseudo)}</span>`;
   if (!Store){ return; }
   if (!me){ main.innerHTML = loginScreen(); $('#summary').textContent=''; return; }
   if (!profile){ main.innerHTML = `<p class="msg">Chargement de ton profil…</p>`; return; }
@@ -601,7 +620,7 @@ function friendsView(){
       <span class="req-act"><button class="btn small primary" type="button" data-accept="${r.uid}">${ICON.check} Accepter</button><button class="btn small" type="button" data-decline="${r.uid}">Refuser</button></span></div>`).join('')}</div>` : '';
   if (!fl.length) return searchBox + results + reqs + mineLine + (results||reqs ? '' : emptyState('Ajoute tes amis', 'Cherche le pseudo d’un ami et envoie-lui une demande. Quand il accepte, tu vois ce qu’il a vu, ses notes et ce qu’il recommande.'));
   const tag = f => f.status==='pending' ? ' <span class="note">(en attente)</span>' : f.status==='refused' ? ' <span class="note">(refusée)</span>' : '';
-  const bar = `<div class="friends-bar">${fl.map(f => `<button class="who${f.status!=='ok'&&f.status!=='loading'?' dim':''}" type="button" data-friend="${f.uid}">${avatar(f.pseudo)}${esc(f.pseudo)}${tag(f)}</button>`).join('')}</div>`;
+  const bar = `<div class="friends-bar">${fl.map(f => `<button class="who${f.status!=='ok'&&f.status!=='loading'?' dim':''}" type="button" data-friend="${f.uid}">${avatar(f.pseudo, false, f.color, f.photo)}${esc(f.pseudo)}${tag(f)}</button>`).join('')}</div>`;
   // recommendations I haven't seen, most-recommended first
   const agg = (pred) => {
     const m = new Map();
@@ -665,7 +684,7 @@ async function submitPseudo(ev){
   err.textContent = 'Vérification…';
   const first = !profile;
   try{
-    const keep = profile ? {platforms:profile.platforms||[], following:profile.following||[], followers:profile.followers||[], private:profile.private!==false, ...(profile.bio?{bio:profile.bio}:{}), ...(profile.color?{color:profile.color}:{}), ...(profile.banner?{banner:profile.banner}:{})} : {platforms:['crunchyroll','netflix'], following:[], followers:[], private:true};
+    const keep = profile ? {platforms:profile.platforms||[], following:profile.following||[], followers:profile.followers||[], private:profile.private!==false, ...(profile.bio?{bio:profile.bio}:{}), ...(profile.color?{color:profile.color}:{}), ...(profile.banner?{banner:profile.banner}:{}), ...(profile.photo?{photo:profile.photo}:{})} : {platforms:['crunchyroll','netflix'], following:[], followers:[], private:true};
     await Store.claimPseudo(me.uid, v, profile && profile.pseudo, keep);
     profile = {...keep, ...(profile||{}), pseudo:v};
     if (first){ closeSheet(true); startList(); toast(`Bienvenue ${v} !`); setTimeout(followUrl, 0); }
@@ -868,7 +887,7 @@ function statsOf(list){
 }
 function renderFriend(uid){
   const mine = uid===me.uid;
-  const f = mine ? {uid, pseudo:profile.pseudo, status:'ok', list:entries, bio:profile.bio||'', color:profile.color||'', banner:profile.banner||'',
+  const f = mine ? {uid, pseudo:profile.pseudo, status:'ok', list:entries, bio:profile.bio||'', color:profile.color||'', banner:profile.banner||'', photo:profile.photo||'',
       nFollowers:(profile.followers||[]).length, nFollowing:following().length, private:isPrivate(profile)} : friends.get(uid);
   if (!f){ $('#sheet').innerHTML = `${PAGE_BACK()}<p class="msg" style="padding:70px 24px">Chargement…</p>`; return; }
   if (f.status==='gone'){ $('#sheet').innerHTML = `${PAGE_BACK()}<p class="msg" style="padding:70px 24px">Ce compte n’existe plus.</p>`; return; }
@@ -881,10 +900,10 @@ function renderFriend(uid){
     : `<button class="btn small primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Demander à suivre</button>`;
   const counts = [`<b class="num">${f.nFollowers||0}</b> abonné${(f.nFollowers||0)>1?'s':''}`, `<b class="num">${f.nFollowing||0}</b> abonnement${(f.nFollowing||0)>1?'s':''}`];
   const head = `
-    <div class="pf-banner" style="${f.banner?`background-image:url('${esc(IMG(f.banner,'w1280'))}')`:`--bc:${esc(f.color||avColor(f.pseudo))}`}"></div>
+    <div class="pf-banner" style="${bannerStyle(f)}"></div>
     <div class="page-in">
       <div class="pf-head">
-        ${avatar(f.pseudo, true, f.color)}
+        ${avatar(f.pseudo, true, f.color, f.photo)}
         <div class="pf-id"><h2 id="shTitle">${esc(f.pseudo)}</h2>
           <p class="note">${f.private?`${ICON.lock} Profil privé`:'Profil public'}${!mine && f.followsMe?', te suit':''}</p></div>
         <div class="pf-act">${action}</div>
@@ -921,16 +940,34 @@ function renderFriend(uid){
   $('#sheet').innerHTML = `${PAGE_BACK()}${head}${body}</div>`;
   $('#sheet').scrollTop = keep;
 }
+const bannerCache = new Map();   // uid -> imported banner picture
+function bannerStyle(f){
+  if (f.banner==='custom'){
+    const img = bannerCache.get(f.uid);
+    if (img===undefined){ bannerCache.set(f.uid, null); Store.getImages(f.uid).then(d => { bannerCache.set(f.uid, okImg(d.banner) ? d.banner : ''); if (sheetId==='friend:'+f.uid) renderFriend(f.uid); }); }
+    if (okImg(img)) return `background-image:url('${img}')`;
+    return `--bc:${esc(f.color||avColor(f.pseudo))}`;
+  }
+  return f.banner ? `background-image:url('${esc(IMG(f.banner,'w1280'))}')` : `--bc:${esc(f.color||avColor(f.pseudo))}`;
+}
 function profileEditor(){
   const banners = [...entries.keys()].map(k => dcache[k]).filter(d => d && d.back);
   return `<div class="sh-body"><div class="pf-edit">
+    <div class="block"><h3>Photo de profil</h3>
+      <div class="up-row">${avatar(profile.pseudo, true, profile.color, profile.photo)}
+        <label class="btn small primary" style="cursor:pointer">Choisir une photo<input type="file" id="photoIn" accept="image/*" hidden></label>
+        ${profile.photo ? `<button class="btn small" type="button" id="photoOff">Retirer</button>` : ''}</div>
+      <p class="note" style="margin-top:6px">Elle est recadrée en carré, au centre.</p></div>
     <div class="block"><h3><label for="bioIn">Bio</label></h3>
       <textarea id="bioIn" maxlength="160" placeholder="Ce que tu aimes regarder, ton anime de cœur, tes plateformes…">${esc(profile.bio||'')}</textarea>
       <p class="note"><span id="bioCount">${(profile.bio||'').length}</span>/160</p></div>
     <div class="block"><h3>Couleur de l’avatar</h3><div class="swatches">${PCOLORS.map(c => `<button type="button" class="sw${(profile.color||avColor(profile.pseudo))===c?' on':''}" style="--sw:${c}" data-color="${c}" aria-label="Couleur ${c}" aria-pressed="${(profile.color||avColor(profile.pseudo))===c}"></button>`).join('')}</div></div>
     <div class="block"><h3>Bannière</h3>
+      <div class="up-row" style="margin-bottom:10px"><label class="btn small primary" style="cursor:pointer">Importer une image<input type="file" id="bannerIn" accept="image/*" hidden></label>
+        ${profile.banner==='custom' ? `<span class="note">Ton image est utilisée.</span>` : ''}</div>
+      <p class="note" style="margin-bottom:8px">Elle est recadrée au format large (3 × 1). Tu peux aussi prendre l’image d’un anime de ta liste :</p>
       ${banners.length ? `<div class="banners"><button type="button" class="bn none${!profile.banner?' on':''}" data-banner="" aria-pressed="${!profile.banner}">Aucune</button>${banners.map(d => `<button type="button" class="bn${profile.banner===d.back?' on':''}" data-banner="${esc(d.back)}" aria-pressed="${profile.banner===d.back}" aria-label="${esc(d.t)}" style="background-image:url('${esc(IMG(d.back,'w300'))}')"></button>`).join('')}</div>`
-        : `<p class="note">Ajoute des animes à ta liste : leurs images pourront servir de bannière.</p>`}</div>
+        : `<p class="note">Ajoute des animes à ta liste : leurs images pourront aussi servir de bannière.</p>`}</div>
   </div></div>`;
 }
 function saveProfileField(patch, msg){
@@ -1005,6 +1042,7 @@ document.addEventListener('click', async ev => {
     save(sheetId, {fav:!e.fav}); toast(e.fav ? 'Retiré de tes préférés' : 'Ajouté à tes préférés, en haut de ton profil'); return; }
   if (d.color){ saveProfileField({color:d.color}); renderFriend(me.uid); return; }
   if (d.banner!==undefined){ saveProfileField({banner:d.banner}, 'Bannière enregistrée'); renderFriend(me.uid); return; }
+  if (t.id==='photoOff'){ saveProfileField({photo:''}, 'Photo retirée'); render(); renderFriend(me.uid); return; }
   if (t.id==='editProfile'){ editingProfile = !editingProfile; renderFriend(me.uid); return; }
   if (t.id==='openSettings2'){ closeSheet(); setTimeout(openSettings, 0); return; }
   if (t.id==='myProfile'){ if (me && profile){ if (sheetId && !isPageKey(sheetId)) closeSheet(); openFriend(me.uid); } return; }
@@ -1045,6 +1083,22 @@ document.addEventListener('change', ev => {
   if (ev.target.id!=='privateIn') return;
   const val = ev.target.checked; profile.private = val; renderSettings();
   Store.setProfile(me.uid, {pseudo:profile.pseudo, private:val}).then(() => toast(val ? 'Profil privé : seules les personnes acceptées voient ta liste' : 'Profil public : tout le monde peut voir ta liste')).catch(() => toast('Pas enregistré, réessaie.'));
+});
+document.addEventListener('change', async ev => {
+  const t = ev.target; if (t.id!=='photoIn' && t.id!=='bannerIn') return;
+  const file = t.files && t.files[0]; t.value = ''; if (!file) return;
+  toast('Préparation de l’image…');
+  try{
+    if (t.id==='photoIn'){
+      const url = await shrinkImage(file, 240, 240, 60000);
+      saveProfileField({photo:url}, 'Photo de profil enregistrée');
+    } else {
+      const url = await shrinkImage(file, 1500, 500, 380000);
+      await Store.setImages(me.uid, {banner:url}); bannerCache.set(me.uid, url);
+      saveProfileField({banner:'custom'}, 'Bannière enregistrée');
+    }
+    render(); renderFriend(me.uid);
+  }catch(e){ toast(e && !e.code && e.message ? e.message : 'Pas enregistré, réessaie.'); }
 });
 document.addEventListener('submit', ev => { if (ev.target.id==='pseudoForm') submitPseudo(ev); });
 $('#scrim').addEventListener('click', () => closeSheet());
