@@ -365,3 +365,14 @@ textarea{width:100%;min-height:72px;border:1px solid var(--line);background:var(
 .fr-says,.cmts,.cmt-list{grid-template-columns:minmax(0,1fr)}
 .cmt-form input{width:100%}
 .cmt-form .btn{flex:none}
+/* crop window */
+.crop-scrim{position:fixed;inset:0;z-index:80;background:rgba(14,11,22,.72);display:grid;place-items:center;padding:16px}
+.crop-box{background:var(--bg);border-radius:18px;padding:18px;width:min(920px,100%);display:grid;gap:12px;box-shadow:var(--lift);max-height:calc(100vh - 32px);overflow:auto}
+.crop-box h2{font-family:var(--display);font-weight:400;font-size:20px;margin:0}
+.crop-frame{position:relative;width:100%;overflow:hidden;border-radius:12px;background:#000;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+.crop-frame:active{cursor:grabbing}
+.crop-frame.round{width:min(340px,100%);justify-self:center;border-radius:50%}
+.crop-frame img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;pointer-events:none}
+.crop-zoom{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:700;color:var(--ink-2)}
+.crop-zoom input{flex:1;accent-color:var(--accent)}
+.crop-box .links{justify-content:flex-end}

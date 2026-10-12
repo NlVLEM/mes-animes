@@ -42,14 +42,15 @@ const PCOLORS = ['#D3245F','#E8590C','#C99A06','#2E8B57','#14806F','#1C7ED6','#5
 const okImg = s => typeof s==='string' && /^data:image\/(webp|jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(s);
 const avatar = (p, big, color, photo) => `<span class="av${big?' big':''}${okImg(photo)?' ph':''}" style="--avc:${esc(color||avColor(p))}" aria-hidden="true">${okImg(photo) ? `<img src="${photo}" alt="">` : esc(String(p||'?').slice(0,1).toUpperCase())}</span>`;
 // pictures chosen from the phone or computer: cropped and compressed here, then stored with the profile (no paid file storage needed)
-async function shrinkImage(file, w, h, maxChars){
+async function shrinkImage(file, w, h, maxChars, round){
   if (!file || !/^image\//.test(file.type)) throw new Error('Choisis une image (JPG, PNG, WebP…).');
-  let bmp;
-  try{ bmp = await createImageBitmap(file); }
-  catch(e){ bmp = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ko(new Error('Cette image ne s’ouvre pas, essaie une autre.')); i.src = URL.createObjectURL(file); }); }
-  const sw = bmp.width, sh = bmp.height, r = Math.max(w/sw, h/sh), cw = w/r, ch = h/r;
+  const img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ko(new Error('Cette image ne s’ouvre pas, essaie une autre (JPG, PNG ou WebP).')); i.src = URL.createObjectURL(file); });
+  const rect = await cropUI(img, w/h, round);           // the person picks the visible part
+  if (!rect) return null;
   const c = document.createElement('canvas'); c.width = w; c.height = h;
-  c.getContext('2d').drawImage(bmp, (sw-cw)/2, (sh-ch)/2, cw, ch, 0, 0, w, h);
+  const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
+  g.drawImage(img, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, w, h);
+  URL.revokeObjectURL(img.src);
   const webp = c.toDataURL('image/webp', .8).startsWith('data:image/webp');
   for (const q of [.82, .7, .58, .46, .34]){
     const url = c.toDataURL(webp ? 'image/webp' : 'image/jpeg', q);
@@ -57,7 +58,61 @@ async function shrinkImage(file, w, h, maxChars){
   }
   throw new Error('Image trop lourde, essaie une autre.');
 }
-
+// crop window: drag to move, slider / wheel / two fingers to zoom; returns the chosen part in image pixels
+function cropUI(img, aspect, round){
+  return new Promise(done => {
+    const nw = img.naturalWidth, nh = img.naturalHeight;
+    const wrap = document.createElement('div'); wrap.className = 'crop-scrim';
+    wrap.innerHTML = `<div class="crop-box" role="dialog" aria-modal="true" aria-labelledby="cropT">
+      <h2 id="cropT">Choisis la partie à afficher</h2>
+      <p class="note">Fais glisser l’image pour la placer, et zoome avec le curseur${matchMedia('(pointer:coarse)').matches?' ou avec deux doigts':' ou la molette'}.</p>
+      <div class="crop-frame${round?' round':''}" style="aspect-ratio:${aspect}" tabindex="0" aria-label="Zone visible : flèches pour déplacer, plus et moins pour zoomer"><img alt="" draggable="false"></div>
+      <label class="crop-zoom"><span>Zoom</span><input type="range" min="1" max="5" step="0.01" value="1" aria-label="Zoom"></label>
+      <div class="links"><button class="btn" type="button" data-crop="cancel">Annuler</button><button class="btn primary" type="button" data-crop="ok">${ICON.check} Valider</button></div></div>`;
+    document.body.appendChild(wrap);
+    const frame = wrap.querySelector('.crop-frame'), pic = frame.querySelector('img'), range = wrap.querySelector('input');
+    pic.src = img.src; pic.style.width = nw+'px'; pic.style.height = nh+'px';
+    let fw = frame.clientWidth, fh = frame.clientHeight, base = Math.max(fw/nw, fh/nh), z = 1, x = 0, y = 0;
+    const sc = () => base*z;
+    function clamp(){ const s = sc(); x = Math.min(0, Math.max(fw - nw*s, x)); y = Math.min(0, Math.max(fh - nh*s, y)); }
+    function draw(){ clamp(); pic.style.transform = `translate(${x}px,${y}px) scale(${sc()})`; }
+    function zoomTo(nz, cx = fw/2, cy = fh/2){ nz = Math.max(1, Math.min(5, nz)); const s0 = sc(); z = nz; const s1 = sc(); x = cx - (cx - x)*s1/s0; y = cy - (cy - y)*s1/s0; range.value = z; draw(); }
+    x = (fw - nw*base)/2; y = (fh - nh*base)/2; draw();
+    const pts = new Map(); let last = null;
+    frame.addEventListener('pointerdown', e => { frame.setPointerCapture(e.pointerId); pts.set(e.pointerId, {x:e.clientX, y:e.clientY}); last = null; });
+    frame.addEventListener('pointermove', e => {
+      if (!pts.has(e.pointerId)) return;
+      const prev = pts.get(e.pointerId); pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
+      if (pts.size===1){ x += e.clientX - prev.x; y += e.clientY - prev.y; draw(); }
+      else if (pts.size===2){
+        const [a, b] = [...pts.values()], d = Math.hypot(a.x-b.x, a.y-b.y), r = frame.getBoundingClientRect();
+        if (last) zoomTo(z * d/last, (a.x+b.x)/2 - r.left, (a.y+b.y)/2 - r.top);
+        last = d;
+      }
+    });
+    const up = e => { pts.delete(e.pointerId); last = null; };
+    frame.addEventListener('pointerup', up); frame.addEventListener('pointercancel', up);
+    frame.addEventListener('wheel', e => { e.preventDefault(); const r = frame.getBoundingClientRect(); zoomTo(z * Math.exp(-e.deltaY*0.0015), e.clientX - r.left, e.clientY - r.top); }, {passive:false});
+    range.addEventListener('input', () => zoomTo(+range.value));
+    frame.addEventListener('keydown', e => {
+      const k = {ArrowLeft:[20,0], ArrowRight:[-20,0], ArrowUp:[0,20], ArrowDown:[0,-20]}[e.key];
+      if (k){ e.preventDefault(); x += k[0]; y += k[1]; draw(); }
+      if (e.key==='+' || e.key==='='){ e.preventDefault(); zoomTo(z*1.1); }
+      if (e.key==='-'){ e.preventDefault(); zoomTo(z/1.1); }
+    });
+    const onResize = () => { const ofw = fw; fw = frame.clientWidth; fh = frame.clientHeight; const k = fw/ofw; base = Math.max(fw/nw, fh/nh); x *= k; y *= k; draw(); };
+    window.addEventListener('resize', onResize);
+    function finish(ok){
+      window.removeEventListener('resize', onResize); document.removeEventListener('keydown', esc, true); wrap.remove();
+      if (!ok) return done(null);
+      const s = sc(); done({sx:-x/s, sy:-y/s, sw:fw/s, sh:fh/s});
+    }
+    const esc = e => { if (e.key==='Escape'){ e.stopPropagation(); finish(false); } };
+    document.addEventListener('keydown', esc, true);
+    wrap.addEventListener('click', e => { const b = e.target.closest('[data-crop]'); if (b) finish(b.dataset.crop==='ok'); else if (e.target===wrap) finish(false); });
+    frame.focus();
+  });
+}
 /* ---------- TMDB ---------- */
 const T = 'https://api.themoviedb.org/3';
 const IMG = (p, size='w342') => p ? `https://image.tmdb.org/t/p/${size}${p}` : '';
@@ -243,7 +298,9 @@ function remove(key){
 }
 function addFrom(key, st){
   const d = dcache[key], h = hits.get(key);
-  const m = d ? snapOf(d) : h ? snapOfHit(h) : null; if (!m) return;
+  let m = d ? snapOf(d) : h ? snapOfHit(h) : null;
+  if (!m) for (const f of friends.values()){ const fe = f.list && f.list.get(key); if (fe && fe.m){ m = {...fe.m}; break; } }   // a friend's suggestion
+  if (!m) return;
   const patch = {st, m};
   if (st==='watching' && !entries.has(key)) patch.started = Date.now();
   if (st==='done') Object.assign(patch, doneFill(key));
@@ -529,6 +586,38 @@ async function loadHome(){
   }catch(e){ disc.homeErr = e.message; }
   disc.loading = false; if (ui.tab==='discover' && !q.trim()) render();
 }
+/* "for you": TMDB's suggestions for the shows I rated best, recommended or put in my favourites */
+const forYou = {key:'', groups:null, loading:false};
+function loadForYou(){
+  const seeds = [...entries.entries()].filter(([,e]) => e.fav || e.reco || e.score>=8)
+    .sort((a,b) => (b[1].fav-a[1].fav) || ((b[1].score||0)-(a[1].score||0)) || ((b[1].updated||0)-(a[1].updated||0))).slice(0, 3);
+  const key = seeds.map(([k]) => k).join(',');
+  if (forYou.loading || forYou.key===key) return;
+  forYou.loading = true; forYou.key = key;
+  Promise.all(seeds.map(async ([k, e]) => {
+    const [kind, id] = k.split('-');
+    try{
+      const j = await tmdb(`/${kind}/${id}/recommendations`);
+      const list = (j.results||[]).map(x => normHit(x, x.media_type==='movie'||x.media_type==='tv' ? x.media_type : kind)).filter(h => h.anime && h.t);
+      list.forEach(h => hits.set(h.key, h));
+      return {seed:(e.m&&e.m.t)||'ça', list};
+    }catch(err){ return {seed:'', list:[]}; }
+  })).then(groups => {
+    // a show suggested for several seeds is only shown once
+    const seen = new Set();
+    forYou.groups = groups.map(g => ({...g, list:g.list.filter(h => !seen.has(h.key) && seen.add(h.key))})).filter(g => g.list.length);
+    forYou.loading = false; if (ui.tab==='discover' && !q.trim()) render();
+  });
+}
+const namesOf = w => w.length<=2 ? w.join(' et ') : `${w.slice(0,2).join(', ')} et ${w.length-2} autre${w.length>3?'s':''}`;
+function friendRecos(){
+  const m = new Map();
+  for (const uid of following()){
+    const f = friends.get(uid); if (!f || f.status!=='ok') continue;
+    for (const [k,e] of f.list){ if (!e.reco) continue; const x = m.get(k) || {k, m:e.m, who:[], sc:[]}; x.who.push(f.pseudo); if (e.score) x.sc.push(e.score); m.set(k, x); }
+  }
+  return [...m.values()].filter(x => { const mine = entries.get(x.k); return !mine || mine.st==='plan'; }).sort((a,b) => b.who.length-a.who.length);
+}
 async function runSearch(page=1){
   const text = q.trim(); if (!text) return;
   disc.err=''; disc.loading = true; if (page===1){ disc.list=[]; disc.key=text; } render();
@@ -586,12 +675,16 @@ function discoverView(){
     }
     if (ui.mine) body = `<p class="note" style="margin:-6px 0 12px">Le filtre « Mes plateformes » s’applique aux suggestions ; pour une recherche, regarde les dispos dans chaque fiche.</p>` + body;
   } else {
-    loadHome();
-    if (disc.homeErr) body = `<p class="msg bad">${esc(disc.homeErr)}</p>`;
-    else if (!disc.home) body = `<p class="msg">Chargement…</p>`;
+    loadHome(); loadForYou(); loadFriends();
+    const sec = (title, l) => l.length ? `<h2 class="sec">${title}</h2>${shelfOf(l)}` : '';
+    // what my friends recommend and I haven't seen, then shows close to the ones I loved
+    const fr = friendRecos().filter(x => !ui.mine || ((x.m&&x.m.pv)||[]).some(p => myPlatforms().includes(p)));
+    let mine = fr.length ? `<h2 class="sec">Recommandés par tes amis</h2><div class="shelf">${fr.slice(0,12).map(x => posterCard(x.k, x.m||{t:'…'}, {discover:true, by:`${namesOf(x.who)} recommande${x.who.length>1?'nt':''}`, sub:''})).join('')}</div>` : '';
+    for (const g of (forYou.groups||[])) mine += sec(`Parce que tu as aimé ${esc(g.seed)}`, g.list.filter(h => !entries.has(h.key)).slice(0, 12));
+    if (disc.homeErr) body = mine + `<p class="msg bad">${esc(disc.homeErr)}</p>`;
+    else if (!disc.home) body = mine + `<p class="msg">Chargement…</p>`;
     else {
-      const sec = (title, l) => l.length ? `<h2 class="sec">${title}</h2>${shelfOf(l)}` : '';
-      body = sec('Nouveaux épisodes cette semaine', disc.home.airing) + sec('Animes populaires', disc.home.pop) + sec('Films d’animation japonais', disc.home.films)
+      body = mine + sec('Nouveaux épisodes cette semaine', disc.home.airing) + sec('Animes populaires', disc.home.pop) + sec('Films d’animation japonais', disc.home.films)
         || `<p class="msg">Rien à proposer sur tes plateformes pour l’instant.</p>`;
     }
   }
@@ -1139,13 +1232,13 @@ document.addEventListener('change', ev => {
 document.addEventListener('change', async ev => {
   const t = ev.target; if (t.id!=='photoIn' && t.id!=='bannerIn') return;
   const file = t.files && t.files[0]; t.value = ''; if (!file) return;
-  toast('Préparation de l’image…');
+
   try{
     if (t.id==='photoIn'){
-      const url = await shrinkImage(file, 240, 240, 60000);
+      const url = await shrinkImage(file, 240, 240, 60000, true); if (!url) return;
       saveProfileField({photo:url}, 'Photo de profil enregistrée');
     } else {
-      const url = await shrinkImage(file, 1500, 500, 380000);
+      const url = await shrinkImage(file, 1500, 500, 380000); if (!url) return;
       await Store.setImages(me.uid, {banner:url}); bannerCache.set(me.uid, url);
       saveProfileField({banner:'custom'}, 'Bannière enregistrée');
     }
