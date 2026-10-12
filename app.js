@@ -970,19 +970,27 @@ function seasonsBlock(key, d, e){
     }).join('')}</div>
     <p class="note" style="margin-top:6px">Touche une saison pour cocher ses épisodes un par un.${hasSp ? ` <button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Afficher les épisodes spéciaux (${d.specials.eps})`}</button>` : ''}</p></div>`;
 }
+/* films: only the best-known three by default (in release order), the rest folded behind a link */
+const allFilms = new Set();
 function relatedBlock(key, d){
   const seen = new Set([key]);
-  const list = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => !seen.has(h.key) && seen.add(h.key)).sort((a,b)=>(a.yr||'9999').localeCompare(b.yr||'9999'));
+  const list = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => !seen.has(h.key) && seen.add(h.key));
   if (!list.length) return '';
-  return `<div class="block"><h3>${d.kind==='tv'?'Films':'Dans la même série'}</h3>
-    <div class="fam">${list.map(h => {
+  const byYear = (a,b) => (a.yr||'9999').localeCompare(b.yr||'9999');
+  // films I already have stay visible, then the most popular ones
+  const ranked = [...list].sort((a,b) => (entries.has(b.key)-entries.has(a.key)) || ((b.pop||0)-(a.pop||0)) || ((b.poster?1:0)-(a.poster?1:0)));
+  const open = allFilms.has(key) || list.length<=4;
+  const shown = (open ? list : ranked.slice(0, 3)).sort(byYear), hidden = list.length - shown.length;
+  return `<div class="block"><h3>${d.kind==='tv'?'Films':'Dans la même série'} <span class="note" style="display:inline">(${list.length})</span></h3>
+    <div class="fam films">${shown.map(h => {
       const e = entries.get(h.key);
       const act = e ? `<span class="tag st-${e.st}">${esc(STATUS[e.st])}</span>`
-        : `<button class="mini" type="button" data-st="${h.key}|plan" aria-label="Ajouter ${esc(h.t)} à regarder">${ICON.plus}</button><button class="mini" type="button" data-st="${h.key}|done" aria-label="Marquer ${esc(h.t)} comme vu">${ICON.check}</button>`;
+        : `<button class="mini" type="button" data-st="${h.key}|plan" aria-label="Ajouter ${esc(h.t)} à regarder" title="À regarder">${ICON.plus}</button><button class="mini" type="button" data-st="${h.key}|done" aria-label="Marquer ${esc(h.t)} comme vu" title="Déjà vu">${ICON.check}</button>`;
       return `<div class="fam-row"><button class="fam-open" type="button" data-open="${h.key}">
           <span class="thumb">${h.poster?`<img src="${esc(IMG(h.poster,'w92'))}" alt="" loading="lazy">`:''}</span>
-          <span style="min-width:0"><span class="ft">${esc(h.t)}</span><span class="fs">Film${h.yr?', '+h.yr:''}</span></span></button><span class="fa">${act}</span></div>`;
-    }).join('')}</div></div>`;
+          <span style="min-width:0"><span class="ft">${esc(h.t)}</span><span class="fs">${h.yr||'Date inconnue'}</span></span></button><span class="fa">${act}</span></div>`;
+    }).join('')}</div>
+    ${hidden ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Voir les ${plural(hidden,'autre film','autres films').replace(/^(\d+) /,'$1 ')}</button>` : list.length>4 ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Afficher moins</button>` : ''}</div>`;
 }
 /* comments: anyone who can see a review can comment it, its author can answer; the database rules check it */
 const comments = new Map();     // 'owner|key' -> [{id, uid, pseudo, text, at}] (null while loading)
@@ -1250,6 +1258,7 @@ document.addEventListener('click', async ev => {
   if (d.sall){ const [key, n, v] = d.sall.split('|'), dd = dcache[key];
     if (!entries.has(key)){ if (dd && dd.seasons.length<=1 && +n>0){ setStatus(key, 'done'); return; } addFrom(key, 'watching'); }
     setEp(key, +n, +v); return; }
+  if (d.films){ allFilms.has(d.films) ? allFilms.delete(d.films) : allFilms.add(d.films); renderSheet(); return; }
   if (d.specials!==undefined){ showSpecials = !showSpecials; renderSheet(); return; }
   if (d.picks!==undefined){ const n = +d.picks; pick.sel.has(n) ? pick.sel.delete(n) : pick.sel.add(n); renderSheet(); return; }
   if (d.pick){ const dd = pick && dcache[pick.key];
