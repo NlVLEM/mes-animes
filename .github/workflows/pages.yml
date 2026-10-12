@@ -1,0 +1,33 @@
+name: Mettre en ligne
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Préparer le site
+        run: mkdir site && cp index.html sw.js manifest.webmanifest *.png site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - name: Mettre en ligne
+        id: deployment
+        uses: actions/deploy-pages@v5
