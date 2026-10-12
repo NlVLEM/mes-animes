@@ -466,3 +466,6 @@ button.pf-count[aria-expanded="true"]{border-color:var(--accent);background:var(
 .s-skip:focus-visible{outline:2px solid var(--accent)}
 .season.skipped{opacity:.55}
 .season.skipped .thumb{filter:grayscale(1)}
+.seg:has(> button:nth-child(3):last-child){grid-template-columns:repeat(3,minmax(0,1fr))}
+.season.skipped{opacity:1}
+.season.skipped .fam-open{opacity:.5}
