@@ -10,5 +10,5 @@ window.CONFIG = {
     appId: "1:353352550784:web:f3e372a6c068297712d965"
   },
   // Clé d'API TMDB (32 caractères), dans themoviedb.org → Paramètres → API
-  tmdbKey: ''
+  tmdbKey: '2d7738b1030f237b15bfd43322925c80'
 };
