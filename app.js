@@ -347,7 +347,7 @@ async function loadPerson(uid){
     const p = await Store.getProfile(uid);
     if (!p){ friends.set(uid, {uid, pseudo:'?', status:'gone', list:new Map(), at:Date.now()}); return; }
     const base = {uid, pseudo:p.pseudo, private:isPrivate(p), followsMe:(p.following||[]).includes(me.uid), list:new Map(), at:Date.now(),
-      bio:p.bio||'', color:p.color||'', banner:p.banner||'', photo:p.photo||'', nFollowers:(p.followers||[]).length, nFollowing:(p.following||[]).length};
+      bio:p.bio||'', color:p.color||'', banner:p.banner||'', photo:p.photo||'', nFollowers:(p.followers||[]).length, nFollowing:(p.following||[]).length, followerIds:p.followers||[], followingIds:p.following||[]};
     if (!isPrivate(p) || (p.followers||[]).includes(me.uid)){
       try{ friends.set(uid, {...base, status:'ok', list:await Store.getList(uid)}); }
       catch(e){ friends.set(uid, {...base, status:'refused'}); }
@@ -396,7 +396,7 @@ async function declineRequest(r){
   Store.declineRequest(me.uid, r.uid).catch(() => toast('Pas enregistré, réessaie.'));
 }
 async function removeFollower(uid, pseudo){
-  profile.followers = (profile.followers||[]).filter(x => x!==uid); if (sheetId==='settings') renderSettings();
+  profile.followers = (profile.followers||[]).filter(x => x!==uid); if (sheetId==='settings') renderSettings(); if (sheetId==='friend:'+me.uid) renderFriend(me.uid);
   try{ await Store.removeFollower(me.uid, uid); toast(`${pseudo} ne voit plus ta liste`); }catch(e){ toast('Pas enregistré, réessaie.'); }
 }
 const pseudoCache = new Map();
@@ -1013,7 +1013,7 @@ function openFriend(uid, fromUrl){
   if (!isPageKey(sheetId)) { lastFocus = document.activeElement; pageReturn = window.scrollY; }
   const key = 'friend:'+uid;
   if (!fromUrl && location.hash!==urlOf(key)){ history.pushState({page:key}, '', urlOf(key)); pushedPage = true; }
-  if (sheetId!==key) editingProfile = false;
+  if (sheetId!==key){ editingProfile = false; peopleTab = null; }
   sheetId = key; showSheet(); $('#sheet').classList.add('page'); $('#sheet').scrollTop = 0; renderFriend(uid);
   const c = $('#sheet .page-back'); c && c.focus({preventScroll:true});
   if (uid!==me.uid && (!friends.has(uid) || friends.get(uid).status!=='ok' || Date.now()-friends.get(uid).at > 60e3)) loadPerson(uid).then(() => { if (sheetId===key) renderFriend(uid); });
@@ -1030,7 +1030,7 @@ function statsOf(list){
 function renderFriend(uid){
   const mine = uid===me.uid;
   const f = mine ? {uid, pseudo:profile.pseudo, status:'ok', list:entries, bio:profile.bio||'', color:profile.color||'', banner:profile.banner||'', photo:profile.photo||'',
-      nFollowers:(profile.followers||[]).length, nFollowing:following().length, private:isPrivate(profile)} : friends.get(uid);
+      nFollowers:(profile.followers||[]).length, nFollowing:following().length, followerIds:profile.followers||[], followingIds:following(), private:isPrivate(profile)} : friends.get(uid);
   if (!f){ $('#sheet').innerHTML = `${PAGE_BACK()}<p class="msg" style="padding:70px 24px">Chargement…</p>`; return; }
   if (f.status==='gone'){ $('#sheet').innerHTML = `${PAGE_BACK()}<p class="msg" style="padding:70px 24px">Ce compte n’existe plus.</p>`; return; }
   document.title = `${f.pseudo} · Mes Animes`;
@@ -1040,7 +1040,11 @@ function renderFriend(uid){
     : f.status==='ok' ? (on ? `<button class="btn small" type="button" data-unfollow="${uid}">Abonné</button>` : `<button class="btn small primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Suivre</button>`)
     : f.status==='pending' ? `<button class="btn small" type="button" data-unfollow="${uid}">Demande envoyée</button>`
     : `<button class="btn small primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Demander à suivre</button>`;
-  const counts = [`<b class="num">${f.nFollowers||0}</b> abonné${(f.nFollowers||0)>1?'s':''}`, `<b class="num">${f.nFollowing||0}</b> abonnement${(f.nFollowing||0)>1?'s':''}`];
+  const canList = mine || f.status==='ok';
+  const countBtn = (kind, n, one, many) => canList
+    ? `<button class="pf-count" type="button" data-people="${kind}" aria-expanded="${peopleTab===kind}"><b class="num">${n}</b> ${n>1?many:one}</button>`
+    : `<span class="pf-count"><b class="num">${n}</b> ${n>1?many:one}</span>`;
+  const counts = [countBtn('followers', f.nFollowers||0, 'abonné', 'abonnés'), countBtn('following', f.nFollowing||0, 'abonnement', 'abonnements')];
   const head = `
     <div class="pf-top"><div class="pf-bg" style="${bannerStyle(f)}" aria-hidden="true"></div><div class="pf-banner" style="${bannerStyle(f)}"></div></div>
     <div class="page-in">
@@ -1050,8 +1054,9 @@ function renderFriend(uid){
           <p class="note">${f.private?`${ICON.lock} Profil privé`:'Profil public'}${!mine && f.followsMe?', te suit':''}</p></div>
         <div class="pf-act">${action}</div>
       </div>
-      ${f.bio ? `<p class="pf-bio">${esc(f.bio)}</p>` : mine && !editingProfile ? `<p class="pf-bio note">Ajoute une petite bio avec « Modifier mon profil ».</p>` : ''}
-      <p class="pf-counts">${counts.map(c => `<span>${c}</span>`).join('')}</p>`;
+      ${f.bio ? `<div class="pf-about"><h3>Bio</h3><p>${esc(f.bio)}</p></div>` : mine && !editingProfile ? `<div class="pf-about empty-bio"><h3>Bio</h3><p class="note">Présente-toi en quelques mots avec « Modifier mon profil ».</p></div>` : ''}
+      <p class="pf-counts">${counts.join('')}</p>
+      ${canList && peopleTab ? peopleBlock(f, mine) : ''}`;
   let body = '';
   if (mine && editingProfile) body += profileEditor();
   if (f.status!=='ok'){
@@ -1092,6 +1097,31 @@ function bannerStyle(f){
     return `--bc:${esc(f.color||avColor(f.pseudo))}`;
   }
   return f.banner ? `background-image:url('${esc(IMG(f.banner,'w1280'))}')` : `--bc:${esc(f.color||avColor(f.pseudo))}`;
+}
+/* followers / following lists on a profile */
+let peopleTab = null;
+const cards = new Map();   // uid -> {pseudo, color, photo}
+function cardOf(uid){
+  if (uid===me.uid) return {pseudo:profile.pseudo, color:profile.color, photo:profile.photo};
+  const f = friends.get(uid); if (f && f.pseudo && f.pseudo!=='?') return {pseudo:f.pseudo, color:f.color, photo:f.photo};
+  if (!cards.has(uid)){ cards.set(uid, null); Store.getProfile(uid).then(p => { cards.set(uid, p ? {pseudo:p.pseudo, color:p.color, photo:p.photo} : {pseudo:'Compte supprimé'}); if (p) pseudoCache.set(uid, p.pseudo); if (String(sheetId).startsWith('friend:')) renderFriend(sheetId.slice(7)); }).catch(() => cards.set(uid, {pseudo:'?'})); }
+  return cards.get(uid);
+}
+function peopleBlock(f, mine){
+  const ids = peopleTab==='followers' ? (f.followerIds||[]) : (f.followingIds||[]);
+  const tabs = `<div class="seg pf-tabs" role="tablist"><button type="button" role="tab" data-people="followers" aria-pressed="${peopleTab==='followers'}">Abonnés (${(f.followerIds||[]).length})</button><button type="button" role="tab" data-people="following" aria-pressed="${peopleTab==='following'}">Abonnements (${(f.followingIds||[]).length})</button></div>`;
+  const rows = ids.map(uid => {
+    const c = cardOf(uid);
+    if (!c) return `<div class="res"><span class="av" aria-hidden="true"></span><span class="note">Chargement…</span></div>`;
+    let act = '';
+    if (uid===me.uid) act = `<span class="note">C’est toi</span>`;
+    else if (mine && peopleTab==='followers') act = `${following().includes(uid) ? '' : `<button class="btn small primary" type="button" data-follow="${uid}|${esc(c.pseudo)}">${ICON.plus} Suivre en retour</button>`}<button class="btn small" type="button" data-rmfollower="${uid}">Retirer</button>`;
+    else if (mine && peopleTab==='following') { const st = (friends.get(uid)||{}).status; act = `<button class="btn small" type="button" data-unfollow="${uid}">${st==='pending'?'Annuler la demande':'Ne plus suivre'}</button>`; }
+    else if (!following().includes(uid)) act = `<button class="btn small" type="button" data-friend="${uid}">Voir le profil</button>`;
+    return `<div class="res"><button class="who-btn" type="button" data-friend="${uid}">${avatar(c.pseudo, false, c.color, c.photo)}<b>${esc(c.pseudo)}</b></button><span class="req-act">${act}</span></div>`;
+  }).join('');
+  const empty = peopleTab==='followers' ? (mine ? 'Personne ne te suit encore. Partage ton pseudo à tes potes !' : 'Personne ne le suit encore.') : (mine ? 'Tu ne suis personne pour l’instant : cherche tes amis dans l’onglet Amis.' : 'Il ne suit personne pour l’instant.');
+  return `<div class="pf-people">${tabs}${ids.length ? `<div class="results">${rows}</div>` : `<p class="note">${empty}</p>`}</div>`;
 }
 function profileEditor(){
   const banners = [...entries.keys()].map(k => dcache[k]).filter(d => d && d.back);
@@ -1188,6 +1218,7 @@ document.addEventListener('click', async ev => {
   if (d.color){ saveProfileField({color:d.color}); renderFriend(me.uid); return; }
   if (d.banner!==undefined){ saveProfileField({banner:d.banner}, 'Bannière enregistrée'); renderFriend(me.uid); return; }
   if (t.id==='photoOff'){ saveProfileField({photo:''}, 'Photo retirée'); render(); renderFriend(me.uid); return; }
+  if (d.people){ peopleTab = peopleTab===d.people && t.classList.contains('pf-count') ? null : d.people; renderFriend(sheetId.slice(7)); return; }
   if (t.id==='editProfile'){ editingProfile = !editingProfile; renderFriend(me.uid); return; }
   if (t.id==='openSettings2'){ closeSheet(); setTimeout(openSettings, 0); return; }
   if (t.id==='myProfile'){ if (me && profile){ if (sheetId && !isPageKey(sheetId)) closeSheet(); openFriend(me.uid); } return; }
