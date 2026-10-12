@@ -376,3 +376,16 @@ textarea{width:100%;min-height:72px;border:1px solid var(--line);background:var(
 .crop-zoom{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:700;color:var(--ink-2)}
 .crop-zoom input{flex:1;accent-color:var(--accent)}
 .crop-box .links{justify-content:flex-end}
+/* profile banner: shown in the exact 3:1 shape it was cropped to, with a soft blurred copy filling the sides */
+.pf-top{position:relative;overflow:hidden;padding-top:calc(58px + env(safe-area-inset-top,0px))}
+.pf-bg{position:absolute;inset:-40px;background:linear-gradient(135deg,var(--bc,#D3245F),color-mix(in srgb,var(--bc,#D3245F) 40%,var(--bg))) center/cover no-repeat;filter:blur(36px) saturate(1.2);opacity:.55;transform:scale(1.1)}
+.pf-top::after{content:"";position:absolute;inset:0;background:linear-gradient(transparent 55%,var(--bg));pointer-events:none}
+.pf-top .pf-banner{position:relative;z-index:1;height:auto;aspect-ratio:3/1;width:min(1100px,calc(100% - 48px));margin:0 auto;border-radius:18px;box-shadow:0 10px 40px rgba(0,0,0,.35)}
+.pf-top .pf-banner::after{display:none}
+.pf-top + .page-in .pf-head{margin-top:-58px}
+.pf-top + .page-in{max-width:1100px}
+@media (max-width:620px){.pf-top{padding-top:0}.pf-top .pf-banner{width:100%;border-radius:0;box-shadow:none}.pf-top + .page-in .pf-head{margin-top:-44px}}
+.pf-top + .page-in .pf-head{margin-top:12px;align-items:flex-start}
+.pf-top + .page-in .pf-head .av.big{margin-top:-64px}
+.pf-top + .page-in .pf-id{padding-top:4px}
+@media (max-width:620px){.pf-top + .page-in .pf-head{margin-top:10px}.pf-top + .page-in .pf-head .av.big{margin-top:-52px;width:88px;height:88px;font-size:38px}}

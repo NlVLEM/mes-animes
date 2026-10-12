@@ -1042,7 +1042,7 @@ function renderFriend(uid){
     : `<button class="btn small primary" type="button" data-follow="${uid}|${esc(f.pseudo)}">${ICON.plus} Demander à suivre</button>`;
   const counts = [`<b class="num">${f.nFollowers||0}</b> abonné${(f.nFollowers||0)>1?'s':''}`, `<b class="num">${f.nFollowing||0}</b> abonnement${(f.nFollowing||0)>1?'s':''}`];
   const head = `
-    <div class="pf-banner" style="${bannerStyle(f)}"></div>
+    <div class="pf-top"><div class="pf-bg" style="${bannerStyle(f)}" aria-hidden="true"></div><div class="pf-banner" style="${bannerStyle(f)}"></div></div>
     <div class="page-in">
       <div class="pf-head">
         ${avatar(f.pseudo, true, f.color, f.photo)}
