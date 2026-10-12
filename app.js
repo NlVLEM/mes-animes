@@ -18,6 +18,7 @@ const ICON = {
   search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
   back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
   star:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z"/></svg>',
+  chat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"/></svg>',
   lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
   heart:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-10-9.3C.4 8.4 2.3 4.5 6 4.1c2.2-.2 3.9 1 6 3.2 2.1-2.2 3.8-3.4 6-3.2 3.7.4 5.6 4.3 4 7.6C19.5 16.4 12 21 12 21z"/></svg>'
 };
@@ -198,6 +199,9 @@ async function firebaseStore(cfg){
     sendRequest: (target, from, pseudo) => fb.setDoc(fb.doc(db, 'users', target, 'requests', from), {pseudo, at:Date.now()}),
     cancelRequest: (target, from) => fb.deleteDoc(fb.doc(db, 'users', target, 'requests', from)),
     async hasRequest(target, from){ try{ return (await fb.getDoc(fb.doc(db, 'users', target, 'requests', from))).exists(); }catch(e){ return false; } },
+    async getComments(owner, key){ const q = await fb.getDocs(fb.collection(db, 'users', owner, 'list', key, 'comments')); return q.docs.map(d => ({id:d.id, ...d.data()})).sort((a,b)=>a.at-b.at); },
+    async addComment(owner, key, c){ const ref = fb.doc(fb.collection(db, 'users', owner, 'list', key, 'comments')); await fb.setDoc(ref, c); return ref.id; },
+    delComment: (owner, key, id) => fb.deleteDoc(fb.doc(db, 'users', owner, 'list', key, 'comments', id)),
     async getImages(uid){ try{ const s = await fb.getDoc(fb.doc(db, 'images', uid)); return s.exists() ? s.data() : {}; }catch(e){ return {}; } },
     setImages: (uid, data) => fb.setDoc(fb.doc(db, 'images', uid), {...data, at:Date.now()}),
     watchRequests: (uid, cb) => fb.onSnapshot(fb.collection(db, 'users', uid, 'requests'), s => cb(s.docs.map(d => ({uid:d.id, ...d.data()}))), () => {}),
@@ -778,7 +782,7 @@ function renderSheet(){
         <button class="reco" type="button" data-fav aria-pressed="${!!e.fav}">${ICON.star} ${e.fav?'Dans tes préférés':'Préféré'}</button></div>
         <p class="note" style="margin-top:6px">Tes abonnés le verront dans leurs recommandations.</p></div>
       <div class="block"><h3><label for="noteIn">Mon avis</label></h3><textarea id="noteIn" placeholder="Ce que tu en as pensé, ton épisode préféré, à qui le conseiller…">${esc(e.note)}</textarea>
-        <p class="note" style="margin-top:4px">Visible par tes abonnés.</p></div>`;
+        <p class="note" style="margin-top:4px">Visible par tes abonnés, qui peuvent le commenter.</p>${e.note || e.score ? thread(me.uid, key) : ''}</div>`;
   } else {
     you = `<div class="block"><h3>Ajouter à ma liste</h3><div class="links">
       <button class="btn primary" type="button" data-st="${key}|plan">${ICON.plus} À regarder</button>
@@ -845,11 +849,56 @@ function relatedBlock(key, d){
           <span style="min-width:0"><span class="ft">${esc(h.t)}</span><span class="fs">Film${h.yr?', '+h.yr:''}</span></span></button><span class="fa">${act}</span></div>`;
     }).join('')}</div></div>`;
 }
+/* comments: anyone who can see a review can comment it, its author can answer; the database rules check it */
+const comments = new Map();     // 'owner|key' -> [{id, uid, pseudo, text, at}] (null while loading)
+const openThreads = new Set();
+function loadComments(owner, key, force){
+  const k = owner+'|'+key;
+  if (comments.has(k) && !force) return;
+  if (!comments.has(k)) comments.set(k, null);
+  Store.getComments(owner, key).then(l => { comments.set(k, l); if (sheetId===key) renderSheet(); }).catch(() => { comments.set(k, []); });
+}
+const rtf = new Intl.RelativeTimeFormat('fr', {numeric:'auto'});
+function ago(t){
+  const s = (t - Date.now())/1000, a = Math.abs(s);
+  if (a < 60) return 'à l’instant';
+  if (a < 3600) return rtf.format(Math.round(s/60), 'minute');
+  if (a < 86400) return rtf.format(Math.round(s/3600), 'hour');
+  if (a < 30*86400) return rtf.format(Math.round(s/86400), 'day');
+  return new Date(t).toLocaleDateString('fr-FR', {day:'numeric', month:'long'});
+}
+function thread(owner, key){
+  const k = owner+'|'+key, l = comments.get(k), open = openThreads.has(k), n = l ? l.length : 0;
+  loadComments(owner, key);
+  const toggle = `<button class="cmt-toggle" type="button" data-thread="${k}" aria-expanded="${open}">${ICON.chat} ${n ? plural(n,'commentaire','commentaires') : 'Commenter'}</button>`;
+  if (!open) return `<div class="cmts">${toggle}</div>`;
+  const people = l || [];
+  return `<div class="cmts">${toggle}
+    <div class="cmt-list">${people.map(c => `<div class="cmt">${avatar(c.pseudo, false, (friends.get(c.uid)||{}).color, c.uid===me.uid ? profile.photo : (friends.get(c.uid)||{}).photo)}
+      <div class="cmt-b"><div class="cmt-h"><b>${esc(c.pseudo)}</b><span class="note">${esc(ago(c.at))}</span>${c.uid===me.uid || owner===me.uid ? `<button class="cmt-del" type="button" data-cdel="${k}|${c.id}" aria-label="Supprimer ce commentaire">${ICON.close}</button>` : ''}</div>
+      <p>${esc(c.text)}</p></div></div>`).join('')}${l===null ? '<p class="note">Chargement…</p>' : ''}</div>
+    <form class="cmt-form" data-cform="${k}"><input type="text" maxlength="500" placeholder="${owner===me.uid ? 'Répondre…' : 'Écrire un commentaire…'}" aria-label="Écrire un commentaire" enterkeyhint="send" autocomplete="off"><button class="btn small primary" type="submit">Envoyer</button></form>
+  </div>`;
+}
+async function sendComment(k, text){
+  const [owner, key] = k.split('|'); text = text.trim().slice(0, 500); if (!text) return;
+  const c = {uid:me.uid, pseudo:profile.pseudo, text, at:Date.now()};
+  const l = comments.get(k) || []; const tmp = {...c, id:'tmp'+Date.now()}; comments.set(k, [...l, tmp]); renderSheet();
+  try{ const id = await Store.addComment(owner, key, c); tmp.id = id; }
+  catch(e){ comments.set(k, (comments.get(k)||[]).filter(x => x!==tmp)); renderSheet(); toast('Commentaire pas envoyé, réessaie.'); }
+}
+async function deleteComment(k, id){
+  const [owner, key] = k.split('|');
+  comments.set(k, (comments.get(k)||[]).filter(c => c.id!==id)); renderSheet();
+  Store.delComment(owner, key, id).catch(() => { toast('Pas supprimé, réessaie.'); loadComments(owner, key, true); });
+}
 function friendsBlock(key){
   const on = friendsOn(key); if (!on.length) return '';
+  const mineE = entries.get(key), myScore = mineE && mineE.score;
   return `<div class="block"><h3>Tes amis</h3><div class="fr-says">${on.map(({f,e}) => {
     const bits = [STATUS[e.st], e.kind==='tv' && e.st==='watching' && watchedTotal(e) ? plural(watchedTotal(e),'épisode vu','épisodes vus') : '', e.score ? `${e.score}/10` : '', e.reco ? 'recommande' : ''].filter(Boolean);
-    return `<div class="say">${avatar(f.pseudo)}<div><div class="l"><button class="link-btn" type="button" data-friend="${f.uid}" style="all:unset;cursor:pointer;font-weight:700">${esc(f.pseudo)}</button> : ${esc(bits.join(', '))}</div>${e.note?`<p>${esc(e.note)}</p>`:''}</div></div>`;
+    const cmp = e.score && myScore ? `<span class="cmp">toi ${myScore}/10</span>` : '';
+    return `<div class="say">${avatar(f.pseudo, false, f.color, f.photo)}<div style="min-width:0"><div class="l"><button class="link-btn" type="button" data-friend="${f.uid}" style="all:unset;cursor:pointer;font-weight:700">${esc(f.pseudo)}</button> : ${esc(bits.join(', '))} ${cmp}</div>${e.note?`<p>${esc(e.note)}</p>`:''}${e.note || e.score ? thread(f.uid, key) : ''}</div></div>`;
   }).join('')}</div></div>`;
 }
 function whereBlock(d){
@@ -919,7 +968,8 @@ function renderFriend(uid){
   } else {
     const l = [...f.list.entries()].sort((a,b)=>(b[1].updated||0)-(a[1].updated||0));
     const pick = s2 => l.filter(([,e]) => e.st===s2);
-    const shelf = (arr, opts) => `<div class="shelf">${arr.map(([k,e]) => posterCard(k, e.m||{t:'…'}, {friend:!mine, sub:'', score:e.score||0, heart:e.reco, ...opts(e)})).join('')}</div>`;
+    const myNote = k => { const m = !mine && entries.get(k); return m && m.score ? `Toi : ${m.score}/10` : ''; };
+    const shelf = (arr, opts) => `<div class="shelf">${arr.map(([k,e]) => posterCard(k, e.m||{t:'…'}, {friend:!mine, sub:myNote(k), score:e.score||0, heart:e.reco, ...opts(e)})).join('')}</div>`;
     const favs = l.filter(([,e]) => e.fav).slice(0,4), reco = l.filter(([,e]) => e.reco), watching = pick('watching'), done = pick('done').sort((a,b)=>(b[1].score||0)-(a[1].score||0)), plan = pick('plan');
     const common = mine ? 0 : l.filter(([k,e]) => e.st==='done' && entries.get(k) && entries.get(k).st==='done').length;
     body += `<div class="sh-body">
@@ -1036,6 +1086,8 @@ document.addEventListener('click', async ev => {
   if (d.season!==undefined){ openSeason = openSeason===+d.season ? null : +d.season; renderSheet(); return; }
   if (d.st){ const [key, st] = d.st.split('|'); setStatus(key, st); if (st==='done' && ui.tab==='watching' && sheetId==null) toast('Rangé dans Vus. Pense à le noter !', 'Noter', () => openSheet(key)); return; }
   if (d.score){ const s = +d.score, e = entries.get(sheetId); if (e) save(sheetId, {score: e.score===s ? 0 : s}); return; }
+  if (d.thread){ openThreads.has(d.thread) ? openThreads.delete(d.thread) : openThreads.add(d.thread); renderSheet(); const i = document.querySelector(`[data-cform="${d.thread}"] input`); i && i.focus({preventScroll:true}); return; }
+  if (d.cdel){ const parts = d.cdel.split('|'); deleteComment(parts[0]+'|'+parts[1], parts[2]); return; }
   if (d.reco!==undefined){ const e = entries.get(sheetId); if (e) save(sheetId, {reco:!e.reco}); return; }
   if (d.fav!==undefined){ const e = entries.get(sheetId); if (!e) return;
     if (!e.fav && [...entries.values()].filter(x => x.fav).length>=4){ toast('4 préférés maximum : retire-en un pour ajouter celui-ci.'); return; }
@@ -1100,7 +1152,9 @@ document.addEventListener('change', async ev => {
     render(); renderFriend(me.uid);
   }catch(e){ toast(e && !e.code && e.message ? e.message : 'Pas enregistré, réessaie.'); }
 });
-document.addEventListener('submit', ev => { if (ev.target.id==='pseudoForm') submitPseudo(ev); });
+document.addEventListener('submit', ev => {
+  const cf = ev.target.closest && ev.target.closest('[data-cform]');
+  if (cf){ ev.preventDefault(); const i = cf.querySelector('input'); const v = i.value; i.value = ''; sendComment(cf.dataset.cform, v); return; } if (ev.target.id==='pseudoForm') submitPseudo(ev); });
 $('#scrim').addEventListener('click', () => closeSheet());
 document.addEventListener('visibilitychange', () => { if (document.visibilityState==='visible' && me && profile){ refreshDetails(); if (ui.tab==='friends') loadFriends(); render(); } });
 
@@ -1115,7 +1169,7 @@ async function refreshDetails(){
 }
 function startList(){
   if (unsubList) unsubList();
-  unsubList = Store.watchList(me.uid, m => { entries = m; listReady = true; render(); if (sheetId!=null && sheetId!=='pseudo' && !(document.activeElement && ['noteIn','bioIn'].includes(document.activeElement.id))) renderSheet(); refreshDetails(); },
+  unsubList = Store.watchList(me.uid, m => { entries = m; listReady = true; render(); if (sheetId!=null && sheetId!=='pseudo' && !(document.activeElement && (['noteIn','bioIn'].includes(document.activeElement.id) || document.activeElement.closest('.cmt-form')))) renderSheet(); refreshDetails(); },
     () => { listReady = true; toast('Impossible de lire ta liste : vérifie les règles Firestore.'); render(); });
   if (unsubProfile) unsubProfile();
   if (Store.watchProfile) unsubProfile = Store.watchProfile(me.uid, p => { if (!p || !profile) return; const changed = JSON.stringify(p.following)!==JSON.stringify(profile.following); profile = {...profile, ...p}; if (changed) loadFriends(); render(); if (sheetId==='settings') renderSettings(); });

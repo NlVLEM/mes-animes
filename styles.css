@@ -344,3 +344,24 @@ textarea{width:100%;min-height:72px;border:1px solid var(--line);background:var(
 .av.ph img{width:100%;height:100%;object-fit:cover;display:block}
 .up-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .up-row .av.big{width:72px;height:72px;font-size:30px}
+/* comments */
+.cmts{margin-top:8px;display:grid;gap:8px}
+.cmt-toggle{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--ink-2)}
+.cmt-toggle svg{width:16px;height:16px}
+.cmt-toggle:focus-visible{outline:2px solid var(--accent);border-radius:6px}
+.cmt-list{display:grid;gap:8px}
+.cmt{display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px;align-items:start}
+.cmt .av{width:24px;height:24px;font-size:11px}
+.cmt-b{background:var(--surface-2);border-radius:12px;padding:6px 10px}
+.cmt-h{display:flex;gap:8px;align-items:center;font-size:13px}
+.cmt-h .note{font-size:12px}
+.cmt-b p{margin:2px 0 0;font-size:14px;color:var(--ink);white-space:pre-line;overflow-wrap:anywhere}
+.cmt-del{all:unset;cursor:pointer;margin-left:auto;color:var(--ink-3);display:grid;place-items:center;width:20px;height:20px}
+.cmt-del svg{width:12px;height:12px}
+.cmt-form{display:flex;gap:6px}
+.cmt-form input{flex:1;min-width:0;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:7px 12px;font-size:15px}
+.cmp{font-size:12px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:1px 8px;white-space:nowrap}
+.say .l{overflow-wrap:anywhere}
+.fr-says,.cmts,.cmt-list{grid-template-columns:minmax(0,1fr)}
+.cmt-form input{width:100%}
+.cmt-form .btn{flex:none}
