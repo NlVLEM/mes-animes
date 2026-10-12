@@ -490,3 +490,13 @@ button.pf-count[aria-expanded="true"]{border-color:var(--accent);background:var(
 .block h3{font-size:14px;color:var(--ink-2)}
 .season.film .s-state select{max-width:120px}
 .season .fs{font-size:12.5px}
+.credit-min{font-size:11px;color:var(--ink-3);margin:24px 0 0;opacity:.7}
+/* tags */
+.tagbar{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:-4px 0 16px;padding-bottom:2px}
+.tagbar::-webkit-scrollbar{display:none}
+.tagbar .chip{flex:none;padding:6px 13px;font-size:13.5px;font-weight:500}
+.tagbar .chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+@media (max-width:520px){.tools #tagf,.tools #sort{flex:1 1 0;min-width:0}}
+.tagbar .chip{border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:999px;cursor:pointer;font-family:inherit}
+.tagbar .chip:hover{border-color:var(--ink-3)}
+.tagbar .chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}

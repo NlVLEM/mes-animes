@@ -113,6 +113,45 @@ function cropUI(img, aspect, round){
     frame.focus();
   });
 }
+/* ---------- tags: TMDB keywords and genres ---------- */
+const TAGS = [
+  {id:'isekai', l:'Isekai', kw:['isekai']},
+  {id:'shonen', l:'Shōnen', kw:['shounen','shonen']},
+  {id:'shojo', l:'Shōjo', kw:['shoujo','shojo']},
+  {id:'seinen', l:'Seinen', kw:['seinen']},
+  {id:'action', l:'Action', tv:[10759], mv:[28]},
+  {id:'fantasy', l:'Fantasy', tv:[10765], mv:[14]},
+  {id:'romance', l:'Romance', kw:['romance'], mv:[10749]},
+  {id:'comedy', l:'Comédie', tv:[35], mv:[35]},
+  {id:'sol', l:'Tranche de vie', kw:['slice of life']},
+  {id:'mystery', l:'Mystère', tv:[9648], mv:[9648]},
+  {id:'psy', l:'Psychologique', kw:['psychological','psychological thriller']},
+  {id:'horror', l:'Horreur', kw:['horror'], mv:[27]},
+  {id:'scifi', l:'Science-fiction', kw:['science fiction'], mv:[878]},
+  {id:'mecha', l:'Mecha', kw:['mecha']},
+  {id:'sports', l:'Sport', kw:['sports','sport']},
+  {id:'drama', l:'Drame', tv:[18], mv:[18]},
+];
+const tagOf = id => TAGS.find(t => t.id===id);
+function hasTag(d, t){
+  if (!d || !t) return false;
+  if (t.kw && (d.kw||[]).some(k => t.kw.includes(k))) return true;
+  const g = d.kind==='tv' ? t.tv : t.mv;
+  return !!(g && (d.gids||[]).some(x => g.includes(x)));
+}
+let kwIds = LS.get('animes-kwids', {});
+async function keywordIds(names){
+  const out = [];
+  for (const n of names){
+    if (kwIds[n]===undefined){
+      try{ const j = await tmdb('/search/keyword', {query:n}); const hit = (j.results||[]).find(r => String(r.name).toLowerCase()===n); kwIds[n] = hit ? hit.id : null; LS.set('animes-kwids', kwIds); }
+      catch(e){ return out; }
+    }
+    if (kwIds[n]) out.push(kwIds[n]);
+  }
+  return out;
+}
+
 /* ---------- TMDB ---------- */
 const T = 'https://api.themoviedb.org/3';
 const IMG = (p, size='w342') => p ? `https://image.tmdb.org/t/p/${size}${p}` : '';
@@ -143,7 +182,7 @@ function normTv(x){
   const reg = seasons.filter(s => s.n>0).sort((a,b)=>a.n-b.n);
   const nx = x.next_episode_to_air;
   return {key:'tv-'+x.id, kind:'tv', id:x.id, t:x.name, ot:x.original_name, poster:x.poster_path, back:x.backdrop_path,
-    yr:(x.first_air_date||'').slice(0,4), ov:x.overview||'', genres:(x.genres||[]).map(g=>g.name), status:x.status,
+    yr:(x.first_air_date||'').slice(0,4), ov:x.overview||'', genres:(x.genres||[]).map(g=>g.name), gids:(x.genres||[]).map(g=>g.id), kw:((x.keywords&&x.keywords.results)||[]).map(k=>String(k.name).toLowerCase()), status:x.status,
     seasons:reg, specials:seasons.find(s=>s.n===0)||null, total:reg.reduce((a,s)=>a+s.eps,0),
     runtime:(x.episode_run_time||[])[0] || (x.last_episode_to_air&&x.last_episode_to_air.runtime) || 24,
     next: nx ? {s:nx.season_number, e:nx.episode_number, air:nx.air_date} : null,
@@ -152,7 +191,7 @@ function normTv(x){
 }
 function normMovie(x){
   return {key:'movie-'+x.id, kind:'movie', id:x.id, t:x.title, ot:x.original_title, poster:x.poster_path, back:x.backdrop_path,
-    yr:(x.release_date||'').slice(0,4), rel:x.release_date, ov:x.overview||'', genres:(x.genres||[]).map(g=>g.name), runtime:x.runtime,
+    yr:(x.release_date||'').slice(0,4), rel:x.release_date, ov:x.overview||'', genres:(x.genres||[]).map(g=>g.name), gids:(x.genres||[]).map(g=>g.id), kw:((x.keywords&&x.keywords.keywords)||[]).map(k=>String(k.name).toLowerCase()), runtime:x.runtime,
     coll:x.belongs_to_collection ? {id:x.belongs_to_collection.id, name:x.belongs_to_collection.name} : null,
     studio:((x.production_companies||[])[0]||{}).name, vote:x.vote_average, pv:providersOf(x['watch/providers']), lang:x.original_language, at:Date.now()};
 }
@@ -179,7 +218,7 @@ function details(key, force){
   if (loadingD.has(key)) return loadingD.get(key);
   const [kind, id] = key.split('-');
   const p = (async () => {
-    const x = await tmdb(`/${kind}/${id}`, {append_to_response:'watch/providers'});
+    const x = await tmdb(`/${kind}/${id}`, {append_to_response:'watch/providers,keywords'});
     const d = kind==='tv' ? normTv(x) : normMovie(x);
     if (!d.ov){ try{ const en = await tmdb(`/${kind}/${id}`, {language:'en-US'}); d.ov = en.overview||''; d.ovEn = !!d.ov; }catch(e){} }
     dcache[key] = d; saveDcache();
@@ -306,9 +345,9 @@ let me = null;            // {uid, name}
 let profile = null;       // {pseudo, platforms, following}
 let entries = new Map();  // key -> my entry
 let listReady = false;
-const ui = Object.assign({tab:'watching', sort:'recent', mine:false, animeOnly:true}, LS.get('animes-ui', {}));
+const ui = Object.assign({tab:'watching', sort:'recent', mine:false, animeOnly:true, tag:'', dtag:''}, LS.get('animes-ui', {}));
 let q = '';
-const saveUi = () => LS.set('animes-ui', {tab:ui.tab, sort:ui.sort, mine:ui.mine, animeOnly:ui.animeOnly});
+const saveUi = () => LS.set('animes-ui', {tab:ui.tab, sort:ui.sort, mine:ui.mine, animeOnly:ui.animeOnly, tag:ui.tag, dtag:ui.dtag});
 const myPlatforms = () => (profile && profile.platforms && profile.platforms.length ? profile.platforms : ['crunchyroll','netflix']);
 
 /* ---------- my list ---------- */
@@ -517,6 +556,7 @@ function myFiltered(st){
   const needle = q.trim().toLowerCase();
   return [...entries.entries()].filter(([k,e]) => (st==='done' ? (e.st==='done'||e.st==='dropped') : e.st===st)
     && (!ui.mine || ((e.m&&e.m.pv)||[]).some(p => myPlatforms().includes(p)))
+    && (!ui.tag || hasTag(dcache[k], tagOf(ui.tag)))
     && (!needle || [e.m&&e.m.t, e.note].some(s => String(s||'').toLowerCase().includes(needle))));
 }
 function sortList(list){
@@ -532,6 +572,7 @@ function sortList(list){
 function toolsBar(placeholder, sorts, extra=''){
   return `<div class="tools">
     <label class="search">${ICON.search}<input type="search" id="q" placeholder="${esc(placeholder)}" value="${esc(q)}" autocomplete="off" enterkeyhint="search" aria-label="${esc(placeholder)}"></label>
+    ${sorts ? `<select id="tagf" aria-label="Tag"><option value="">Tous les tags</option>${TAGS.map(t => `<option value="${t.id}"${ui.tag===t.id?' selected':''}>${t.l}</option>`).join('')}</select>` : ''}
     ${sorts ? `<select id="sort" aria-label="Trier">${sorts.map(([v,l])=>`<option value="${v}"${ui.sort===v?' selected':''}>${l}</option>`).join('')}</select>` : ''}
     <button class="toggle" type="button" id="mine" aria-pressed="${ui.mine}">Mes plateformes</button>${extra}
   </div>`;
@@ -618,7 +659,7 @@ function listView(){
     : emptyState('Aucun anime vu', '', goDiscover);
   const list = sortList(myFiltered(ui.tab));
   let body;
-  if (!list.length) body = `<p class="msg">Aucun anime ne correspond${ui.mine?' sur tes plateformes':''}.</p>`;
+  if (!list.length) body = `<p class="msg">Aucun anime ne correspond.</p>`;
   else if (ui.tab==='watching') body = `<div class="rows">${list.map(([k,e]) => watchRow(k,e)).join('')}</div>`;
   else if (ui.tab==='done'){
     const done = list.filter(([,e]) => e.st==='done'), drop = list.filter(([,e]) => e.st==='dropped');
@@ -689,6 +730,34 @@ function friendRecos(){
   }
   return [...m.values()].filter(x => { const mine = entries.get(x.k); return !mine || mine.st==='plan'; }).sort((a,b) => b.who.length-a.who.length);
 }
+const tagRes = {key:'', list:[], page:0, more:false, loading:false, err:''};
+async function loadTag(page){
+  const key = ui.dtag + '|' + (ui.mine ? myPlatforms().join(',') : '');
+  if (tagRes.loading || (tagRes.key===key && page<=tagRes.page)) return;
+  if (tagRes.key!==key){ tagRes.key = key; tagRes.list = []; tagRes.page = 0; tagRes.err = ''; }
+  const t = tagOf(ui.dtag); if (!t) return;
+  tagRes.loading = true;
+  try{
+    let prov = '';
+    if (ui.mine){ const map = await providerIds(); prov = myPlatforms().flatMap(k => map[k]||[]).join('|'); }
+    const ids = t.kw ? await keywordIds(t.kw) : [];
+    const base = {with_original_language:'ja', watch_region:'FR', with_watch_providers:prov, include_adult:false, sort_by:'popularity.desc', page, 'vote_count.gte':20};
+    const q1 = kind => {
+      const g = kind==='tv' ? t.tv : t.mv;
+      if (ids.length) return tmdb(`/discover/${kind}`, {...base, with_genres:16, with_keywords:ids.join('|')});
+      if (g) return tmdb(`/discover/${kind}`, {...base, with_genres:`16,${g[0]}`});
+      return Promise.resolve({results:[], total_pages:0});
+    };
+    const [tv, mv] = await Promise.all([q1('tv'), q1('movie')]);
+    if (tagRes.key!==key) return;
+    const l = [...(tv.results||[]).map(x => normHit(x,'tv')), ...(mv.results||[]).map(x => normHit(x,'movie'))].sort((a,b) => b.pop-a.pop);
+    l.forEach(h => hits.set(h.key, h));
+    const seen = new Set(tagRes.list.map(h => h.key));
+    tagRes.list = tagRes.list.concat(l.filter(h => !seen.has(h.key)));
+    tagRes.page = page; tagRes.more = page < Math.max(tv.total_pages||0, mv.total_pages||0);
+  }catch(e){ tagRes.err = e.message; }
+  tagRes.loading = false; if (ui.tab==='discover') render();
+}
 async function runSearch(page=1){
   const text = q.trim(); if (!text) return;
   disc.err=''; disc.loading = true; if (page===1){ disc.list=[]; disc.key=text; } render();
@@ -744,6 +813,11 @@ function discoverView(){
       if (hidden && ui.animeOnly) body += `<p class="msg">${plural(hidden, 'autre résultat', 'autres résultats')} (films, séries, animation non japonaise). <button class="btn small" type="button" id="showAll">Les afficher</button></p>`;
       if (disc.more) body += `<div class="more"><button class="btn" type="button" id="moreRes">${disc.loading?'Chargement…':'Plus de résultats'}</button></div>`;
     }
+  } else if (ui.dtag){
+    const t = tagOf(ui.dtag); loadTag(1);
+    if (tagRes.err) body = `<p class="msg bad">${esc(tagRes.err)}</p>`;
+    else if (!tagRes.list.length) body = `<p class="msg">${tagRes.loading ? 'Chargement…' : 'Rien trouvé pour ce tag.'}</p>`;
+    else body = groupedShelfOf(tagRes.list) + (tagRes.more ? `<div class="more"><button class="btn" type="button" id="moreTag">${tagRes.loading?'Chargement…':'Plus'}</button></div>` : '');
   } else {
     loadHome(); loadForYou(); loadFriends();
     const sec = (title, l) => l.length ? `<h2 class="sec">${title}</h2>${shelfOf(l)}` : '';
@@ -758,7 +832,8 @@ function discoverView(){
         || `<p class="msg">Rien à proposer sur tes plateformes pour l’instant.</p>`;
     }
   }
-  return toolsBar('Chercher un anime ou un film', null, extra) + body;
+  const chips = q.trim() ? '' : `<div class="tagbar" role="group" aria-label="Tags">${TAGS.map(t => `<button class="chip" type="button" data-dtag="${t.id}" aria-pressed="${ui.dtag===t.id}">${t.l}</button>`).join('')}</div>`;
+  return toolsBar('Chercher un anime ou un film', null, extra) + chips + body;
 }
 
 /* friends tab */
@@ -964,8 +1039,8 @@ function renderSheet(){
         ${you}
         ${friendsBlock(key)}
         ${whereBlock(d)}
-        ${d.ov ? `<div class="block"><h3>Résumé${d.ovEn?' <span class="note" style="display:inline">(en anglais, pas encore traduit)</span>':''}</h3><p class="syn">${esc(d.ov)}</p></div>`:''}
-        <div class="links"><a class="btn small" href="https://www.themoviedb.org/${d.kind}/${d.id}?language=fr" target="_blank" rel="noopener">Fiche TMDB</a>${e?`<button class="btn small danger" type="button" data-remove="${key}">Retirer de ma liste</button>`:''}</div>
+        ${d.ov ? `<div class="block"><h3>Résumé</h3><p class="syn">${esc(d.ov)}</p></div>`:''}
+        <div class="links">${e?`<button class="btn small danger" type="button" data-remove="${key}">Retirer de ma liste</button>`:''}</div>
       </div>
     </div></div>`;
   $('#sheet').scrollTop = keepScroll;
@@ -1324,8 +1399,7 @@ function renderSettings(){
       <div class="block"><h3>Mon compte</h3>
         
         <div class="links"><button class="btn small" type="button" id="exp">Télécharger ma liste</button><button class="btn small danger" type="button" id="signout">Me déconnecter</button></div></div>
-      <div class="block credit"><img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_short-8e7b30f73a4020692ccca9c88bafe5dcb6f8a62a4c6bc55cd9ba82bb2cd95f6c.svg" alt="TMDB">
-        <p class="note">This product uses the TMDB API but is not endorsed or certified by TMDB. Infos et images : <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>. Dispos en France : <a href="https://www.justwatch.com/fr" target="_blank" rel="noopener">JustWatch</a>.</p></div>
+      <p class="credit-min">Données : TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
     </div>`;
 }
 function exportList(){
@@ -1400,6 +1474,8 @@ document.addEventListener('click', async ev => {
   if (d.remove){ closeSheet(); remove(d.remove); return; }
   if (t.id==='mine'){ ui.mine = !ui.mine; saveUi(); render(); return; }
   if (t.id==='animeOnly' || t.id==='showAll'){ ui.animeOnly = t.id==='showAll' ? false : !ui.animeOnly; saveUi(); render(); return; }
+  if (d.dtag){ ui.dtag = ui.dtag===d.dtag ? '' : d.dtag; saveUi(); render(); return; }
+  if (t.id==='moreTag'){ if (!tagRes.loading) loadTag(tagRes.page+1); return; }
   if (t.id==='moreRes'){ if (!disc.loading) runSearch(disc.page+1); return; }
   if (t.id==='openSettings'){ if (me && profile) openSettings(); return; }
   if (t.id==='signout'){ closeSheet(); await Store.signOut(); return; }
@@ -1423,6 +1499,7 @@ document.addEventListener('input', ev => {
 document.addEventListener('change', ev => {
   const t = ev.target;
   if (t.id==='sort'){ ui.sort = t.value; saveUi(); render(); }
+  if (t.id==='tagf'){ ui.tag = t.value; saveUi(); render(); }
   if (t.dataset.plat){
     const k = t.dataset.plat, cur = myPlatforms();
     profile.platforms = t.checked ? [...new Set([...cur, k])] : cur.filter(x => x!==k);
@@ -1479,7 +1556,7 @@ function tidyStatuses(){
 }
 async function refreshDetails(){
   if (refreshing) return; refreshing = true;
-  const stale = ([k,e]) => { const d = dcache[k]; if (!d) return true; if (!fresh(d)) return e.st!=='plan' || !d; return e.st==='done' && d.kind==='tv' && Date.now()-d.at > 2*DAY; };
+  const stale = ([k,e]) => { const d = dcache[k]; if (!d || !d.kw) return true; if (!fresh(d)) return e.st!=='plan' || !d; return e.st==='done' && d.kind==='tv' && Date.now()-d.at > 2*DAY; };
   const keys = [...entries.entries()].filter(stale).map(([k]) => k);
   for (const k of keys){ try{ await details(k); }catch(e){ if (e.message.includes('Clé')) break; } await new Promise(r => setTimeout(r, 120)); }
   refreshing = false; tidyStatuses(); render();
