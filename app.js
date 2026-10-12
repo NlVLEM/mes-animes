@@ -19,6 +19,7 @@ const ICON = {
   back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
   star:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z"/></svg>',
   chat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"/></svg>',
+  chev:'<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>',
   lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
   heart:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-10-9.3C.4 8.4 2.3 4.5 6 4.1c2.2-.2 3.9 1 6 3.2 2.1-2.2 3.8-3.4 6-3.2 3.7.4 5.6 4.3 4 7.6C19.5 16.4 12 21 12 21z"/></svg>'
 };
@@ -207,16 +208,26 @@ const seenTotal = (d, e) => liveSeasons(d, e).reduce((a,s)=>a+Math.min((e&&e.w||
 const watchedTotal = e => Object.entries(e.w||{}).filter(([n])=>+n>0).reduce((a,[,v])=>a+(v||0),0);
 function currentSeason(d, e){
   const w = e.w||{}, live = liveSeasons(d, e);
-  const s = live.find(s => (w[s.n]||0) < airedIn(d, s.n)) || live.find(s => (w[s.n]||0) < s.eps) || live[live.length-1] || d.seasons[d.seasons.length-1];
+  const s = live.find(s => (e.ss||{})[s.n]==='watching' && (w[s.n]||0) < airedIn(d, s.n)) || live.find(s => (w[s.n]||0) < airedIn(d, s.n)) || live.find(s => (w[s.n]||0) < s.eps) || live[live.length-1] || d.seasons[d.seasons.length-1];
   return s ? s.n : 1;
 }
+// each season has its own state: Vue, En cours, À voir or Pas prévue
+function seasonState(d, e, n){
+  if (!e) return 'plan';
+  if (skipped(e, n)) return 'skip';
+  const w = (e.w||{})[n]||0, aired = n===0 ? ((d.specials||{}).eps||0) : airedIn(d, n);
+  if ((e.ss||{})[n]==='watching' && !(aired && w>=aired)) return 'watching';
+  if (aired && w>=aired) return 'done';
+  return w>0 ? 'watching' : 'plan';
+}
+const SSTATE = {done:'Vue', watching:'En cours', plan:'À voir', skip:'Pas prévue'};
 // what the status should be given what is ticked
 function statusFor(d, e, w){
   if (!e || e.st==='dropped') return e && e.st;
   const ee = {...e, w}, live = liveSeasons(d, ee);
   const allOut = live.length && live.every(x => (w[x.n]||0) >= airedIn(d, x.n)) && live.some(x => airedIn(d, x.n) > 0);
   const nextIsLive = d.next && !skipped(ee, d.next.s);
-  const any = Object.entries(w).some(([k,v]) => +k>0 && v>0);
+  const any = Object.entries(w).some(([k,v]) => +k>0 && v>0) || live.some(x => (e.ss||{})[x.n]==='watching');
   return allOut && !nextIsLive ? 'done' : any ? 'watching' : e.st;
 }
 function reconcile(key, extra={}){
@@ -971,6 +982,20 @@ function renderSheet(){
 /* seasons: big rows with a clear "Marquer vue" button; "Déjà vu" first asks which seasons were seen */
 let pick = null;   // {key, sel:Set of season numbers} while choosing seen seasons
 const seasonLabel = s => s.n===0 ? 'Épisodes spéciaux' : (s.name && !/^saison\s*\d+$/i.test(s.name) ? `Saison ${s.n} : ${s.name}` : `Saison ${s.n}`);
+function setSeasonState(key, n, st){
+  const d = dcache[key]; if (!d) return;
+  if (!entries.has(key)) addFrom(key, 'plan');
+  const e = entries.get(key); if (!e) return;
+  const w = {...(e.w||{})}, ss = {...(e.ss||{})}, aired = n===0 ? ((d.specials||{}).eps||0) : airedIn(d, n);
+  let skip = (e.skip||[]).filter(x => x!==n), stop = e.stop ?? null;
+  if (stop!=null && n > stop){ skip = [...new Set([...skip, ...d.seasons.filter(x => x.n > stop && x.n!==n).map(x => x.n)])]; stop = null; }   // leaving a "stopped" range: keep the others ignored
+  delete ss[n];
+  if (st==='done') w[n] = aired || (d.seasons.find(x => x.n===n)||{}).eps || 0;
+  else if (st==='watching'){ ss[n] = 'watching'; if ((w[n]||0) >= aired) w[n] = 0; openSeason = n; }
+  else if (st==='plan') w[n] = 0;
+  else if (st==='skip') skip = [...new Set([...skip, n])];
+  reconcile(key, {w, ss, skip, stop});
+}
 function startPick(key){
   const d = dcache[key], e = entries.get(key); if (!d) return;
   const sel = new Set(d.seasons.filter(s => airedIn(d, s.n) > 0 && (!e || ((e.w||{})[s.n]||0) >= 0)).map(s => s.n));
@@ -1020,8 +1045,9 @@ function seasonsBlock(key, d, e){
     const prev = items.slice(0, i).reverse().find(x => x.s && x.s.n>0), next = items.slice(i+1).find(x => x.s && x.s.n>0);
     const where = prev && next ? `entre la saison ${prev.s.n} et la saison ${next.s.n}` : prev && d.seasons.length>1 ? `après la saison ${prev.s.n}` : !prev && next ? 'avant la série' : '';
     const seen = fe && fe.st==='done';
-    const mark = seen ? `<button class="s-mark on" type="button" data-fmark="${h.key}|plan" aria-pressed="true" aria-label="Décocher ${esc(h.t)}">${ICON.check} Vu</button>`
-      : `<button class="s-mark" type="button" data-fmark="${h.key}|done" aria-pressed="false" aria-label="Marquer ${esc(h.t)} comme vu">Marquer vu</button>`;
+    const fst = !fe ? 'none' : fe.st==='done' ? 'done' : fe.st==='dropped' ? 'skip' : 'plan';
+    const mark = `<label class="s-state st-${fst==='none'?'plan':fst}"><span class="vh">État du film ${esc(h.t)}</span>
+      <select data-fstate="${h.key}">${[['done','Vu'],['plan','À voir'],['none','Pas dans ma liste']].map(([v,l]) => `<option value="${v}"${v===fst||(fst==='skip'&&v==='none')?' selected':''}>${l}</option>`).join('')}</select>${ICON.chev}</label>`;
     // on the show's page its name is implied: "Fire Force : Les débuts" reads "Les débuts"
     const short = (() => { for (const nm of [d.t, d.ot]){ if (!nm) continue; const b = baseName(nm); const t = String(h.t); if (b && fold(t).startsWith(b)){ const rest = t.slice(b.length).replace(/^[\s:：\-–—,.]+/, ''); let r = rest.replace(/^(le |the )?(film|movie)\s*(\d*)\s*[-:：–—]\s*/i, (m0, a1, a2, n) => n ? `${n} : ` : ''); if (r.length<3) r = rest; if (r.length>=3) return r.charAt(0).toUpperCase()+r.slice(1); } } return h.t; })();
     return `<div class="season film${seen?' seen':''}"><div class="season-hd">
@@ -1034,16 +1060,12 @@ function seasonsBlock(key, d, e){
     <div class="seasons">${items.map((it, i) => { if (it.f) return filmRow(it.f, i); const s = it.s; return (() => {
       const w = e ? ((e.w||{})[s.n]||0) : 0, aired = s.n===0 ? s.eps : airedIn(d, s.n), full = w>=s.eps && s.eps>0, open = openSeason===s.n;
       const sub = [e && w && !full ? `${w} sur ${s.eps} vus` : plural(s.eps,'épisode','épisodes'), s.air ? (s.air > today() ? `sortie ${fmtDay(s.air)}` : s.air.slice(0,4)) : '', aired<s.eps && aired>0 ? `${aired} sortis` : ''].filter(Boolean).join(', ');
-      const mark = aired===0 && !full ? `<span class="s-mark off">Pas encore sortie</span>`
-        : `<button class="s-mark${full?' on':''}" type="button" data-sall="${key}|${s.n}|${full?0:Math.max(aired,0)}" aria-pressed="${full}" aria-label="${full?'Décocher':'Marquer comme vue'} : ${esc(seasonLabel(s))}">${full?`${ICON.check} Vue`:'Marquer vue'}</button>`;
-      const sk = e && skipped(e, s.n);
-      const firstSkipped = sk && !d.seasons.some(x => x.n < s.n && skipped(e, x.n));
-      if (sk) return `<div class="season skipped"><div class="season-hd">
-          <span class="fam-open" style="cursor:default"><span class="thumb">${s.poster?`<img src="${esc(IMG(s.poster,'w92'))}" alt="" loading="lazy">`:''}</span>
-          <span style="min-width:0"><span class="ft">${esc(seasonLabel(s))}</span><span class="fs">${firstSkipped ? 'Tu t’es arrêté avant cette saison' : 'Pas prévue'}</span></span></span>
-          ${firstSkipped ? `<button class="s-mark" type="button" data-unstop="${key}">Reprendre</button>` : ''}</div></div>`;
-      const ignoreBtn = e && s.n>1 && !full && !d.seasons.some(x => x.n >= s.n && ((e.w||{})[x.n]||0) > 0) ? `<button class="s-skip" type="button" data-stopat="${key}|${s.n}" title="Ignorer cette saison et les suivantes">M’arrêter ici</button>` : '';
-      return `<div class="season${open?' open':''}${full?' seen':''}">
+      const st = seasonState(d, e, s.n);
+      const opts = (aired===0 && st!=='done' ? ['plan','skip'] : ['done','watching','plan','skip']);
+      const mark = `<label class="s-state st-${st}"><span class="vh">État de ${esc(seasonLabel(s))}</span>
+        <select data-sstate="${key}|${s.n}">${opts.map(o => `<option value="${o}"${o===st?' selected':''}>${o==='plan' && aired===0 ? 'Pas encore sortie' : o==='watching' && st==='watching' ? `En cours · ${w}/${s.eps}` : SSTATE[o]}</option>`).join('')}</select>${ICON.chev}</label>`;
+      const ignoreBtn = '';
+      return `<div class="season${open?' open':''}${st==='done'?' seen':''}${st==='skip'?' skipped':''}">
         <div class="season-hd">
           <button class="fam-open" type="button" data-season="${s.n}" aria-expanded="${open}" title="Voir les épisodes">
             <span class="thumb">${s.poster?`<img src="${esc(IMG(s.poster,'w92'))}" alt="" loading="lazy">`:''}</span>
@@ -1052,10 +1074,10 @@ function seasonsBlock(key, d, e){
           </button>
           <span class="s-acts">${mark}${ignoreBtn}</span>
         </div>
-        ${open ? (e ? pipsFor(key, d, e, s.n) : `<p class="note" style="padding:0 12px 12px">Coche « Marquer vue », ou ajoute l’anime à ta liste pour cocher épisode par épisode.</p>`) : ''}
+        ${open ? (e ? pipsFor(key, d, e, s.n) : `<p class="note" style="padding:0 12px 12px">Choisis « En cours » ou « Vue » pour ajouter l’anime à ta liste et cocher épisode par épisode.</p>`) : ''}
       </div>`; })(); }).join('')}</div>
     ${fl.hidden ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Autres (${fl.hidden}) : compilations, récaps, éditions spéciales…</button>` : fl.open && fl.list.length>fl.main.length ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Masquer les autres</button>` : ''}
-    <p class="note" style="margin-top:6px">Rangés par date de sortie. Touche une saison pour cocher ses épisodes un par un.${hasSp ? ` <button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Afficher les épisodes spéciaux (${d.specials.eps})`}</button>` : ''}</p></div>`;
+    <p class="note" style="margin-top:6px">Rangés par date de sortie. Choisis l’état de chaque saison, ou touche-la pour cocher ses épisodes un par un.${hasSp ? ` <button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Afficher les épisodes spéciaux (${d.specials.eps})`}</button>` : ''}</p></div>`;
 }
 /* films: only the best-known three by default (in release order), the rest folded behind a link */
 const allFilms = new Set();
@@ -1448,6 +1470,12 @@ document.addEventListener('change', async ev => {
     toast(code.includes('permission-denied') ? 'La base refuse l’image : colle les nouvelles règles Firestore (fichier firestore.rules) puis réessaie.'
       : code ? 'Pas enregistré : vérifie ta connexion et réessaie.' : (e && e.message) || 'Pas enregistré, réessaie.');
   }
+});
+document.addEventListener('change', ev => {
+  const t = ev.target; if (!t.dataset) return;
+  if (t.dataset.fstate){ const k = t.dataset.fstate; if (t.value==='none'){ if (entries.has(k)) remove(k); } else setStatus(k, t.value); return; }
+  if (!t.dataset.sstate) return;
+  const [key, n] = t.dataset.sstate.split('|'); setSeasonState(key, +n, t.value);
 });
 document.addEventListener('submit', ev => {
   const cf = ev.target.closest && ev.target.closest('[data-cform]');
