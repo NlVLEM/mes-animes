@@ -102,6 +102,8 @@ select{border:1px solid var(--line);background:var(--surface);border-radius:999p
 .poster .s{font-size:12.5px;color:var(--ink-3);margin-top:-4px}
 .flag{position:absolute;left:8px;top:8px;background:var(--surface);color:var(--ink);font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px;box-shadow:0 1px 3px rgba(0,0,0,.2)}
 .score{position:absolute;right:8px;bottom:8px;background:var(--accent);color:var(--accent-ink);font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px}
+.cnt{position:absolute;left:8px;bottom:8px;background:rgba(20,16,30,.82);color:#fff;font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px;max-width:calc(100% - 16px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.poster .cover:has(.score) .cnt{max-width:calc(100% - 70px)}
 .add{position:absolute;right:8px;top:8px;width:34px;height:34px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;box-shadow:0 2px 6px rgba(0,0,0,.25)}
 .add svg{width:18px;height:18px}
 .plats{display:flex;gap:4px;flex-wrap:wrap}
@@ -136,6 +138,7 @@ h2.sec:first-child{margin-top:4px}
 .empty h2{font-family:var(--display);font-weight:400;font-size:20px;margin:0 0 6px;color:var(--ink)}
 .empty p{margin:0 0 14px}
 .btn{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:9px 16px;font-weight:700;font-size:14px;display:inline-flex;gap:6px;align-items:center;text-decoration:none}
+.btn svg{width:16px;height:16px;flex:none}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .btn.small{padding:6px 12px;font-size:13px}
 .btn.danger{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
@@ -173,6 +176,21 @@ h2.sec:first-child{margin-top:4px}
 .stars button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--surface);font-size:12.5px;font-weight:700;color:var(--ink-2);padding:0}
 .stars button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 textarea{width:100%;min-height:72px;border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:10px 12px;font-size:15px;resize:vertical}
+.fam{display:grid;gap:2px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:4px}
+.fam-row{display:flex;align-items:center;gap:6px;border-radius:10px;padding-right:6px}
+.fam-row.cur{background:var(--accent-soft)}
+.fam-open{all:unset;cursor:pointer;flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:6px;border-radius:10px}
+.fam-open:focus-visible{outline:2px solid var(--accent)}
+.thumb{width:36px;height:52px;border-radius:6px;overflow:hidden;flex:none;background:var(--surface-2)}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.ft{display:block;font-weight:700;font-size:14px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fs{display:block;font-size:12.5px;color:var(--ink-3)}
+.fa{display:flex;gap:4px;flex:none}
+.mini{width:32px;height:32px;border-radius:50%;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center;padding:0;color:var(--ink-2)}
+.mini svg{width:16px;height:16px}
+.tag{font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.tag.st-done{background:var(--avail-soft);color:var(--avail)}
+.tag.st-watching{background:var(--accent-soft);color:var(--accent)}
 .where{display:grid;gap:8px}
 .where a.svc{display:flex;align-items:center;gap:10px;text-decoration:none;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-weight:700}
 .where a.svc .dot{width:12px;height:12px;border-radius:50%;background:var(--pc,#777);flex:none}
@@ -271,8 +289,10 @@ function savePrefs(){ prefsAt = Date.now(); LS.set(K.prefs, prefs); LS.set(K.pre
 /* ---------- AniList ---------- */
 const media = new Map();   // id -> compact media, from searches and from the list
 for (const e of entries.values()) if (e.m) media.set(e.m.id, e.m);
-const FRAG = `fragment M on Media { id title{romaji english native} coverImage{extraLarge large color} bannerImage format status episodes duration season seasonYear startDate{year} genres averageScore description(asHtml:false) siteUrl nextAiringEpisode{episode airingAt} externalLinks{site url type language} studios(isMain:true){nodes{name}} }`;
+const FRAG = `fragment M on Media { id title{romaji english native} coverImage{extraLarge large color} bannerImage format status episodes duration season seasonYear startDate{year month day} genres averageScore description(asHtml:false) siteUrl nextAiringEpisode{episode airingAt} externalLinks{site url type language} studios(isMain:true){nodes{name}} relations{edges{relationType node{id type}}} }`;
 class ApiError extends Error {}
+// relations that keep you inside the same story: seasons, movies, specials, recaps, remakes
+const WALK = new Set(['PREQUEL','SEQUEL','PARENT','SIDE_STORY','SUMMARY','ALTERNATIVE']);
 async function anilist(query, variables){
   let r;
   try{ r = await fetch('https://graphql.anilist.co', {method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'}, body:JSON.stringify({query:query+'\n'+FRAG, variables})}); }
@@ -292,11 +312,74 @@ function compact(x){
     studio:x.studios&&x.studios.nodes&&x.studios.nodes[0]&&x.studios.nodes[0].name,
     links:(x.externalLinks||[]).filter(l=>l.type==='STREAMING').map(l=>({site:l.site, url:l.url, lang:l.language||''})),
     nx:x.nextAiringEpisode?{ep:x.nextAiringEpisode.episode, at:x.nextAiringEpisode.airingAt*1000}:null,
+    sd:x.startDate&&x.startDate.year ? x.startDate.year*10000+(x.startDate.month||12)*100+(x.startDate.day||28) : 99999999,
+    rel:((x.relations&&x.relations.edges)||[]).filter(r=>r.node&&r.node.type==='ANIME'&&WALK.has(r.relationType)).map(r=>({id:r.node.id, k:r.relationType})),
     fetched:Date.now()
   };
   media.set(m.id, m);
   const e = entries.get(String(m.id)); if (e) e.m = m;
   return m;
+}
+/* other seasons of a show are kept in a light cache (no synopsis) so the list can group them */
+let mcache = LS.get('animes-media', {});
+for (const m of Object.values(mcache)) if (!media.has(m.id)) media.set(m.id, m);
+function saveMediaCache(ids){
+  for (const id of ids){ const m = media.get(id); if (m){ const {d, ...lite} = m; mcache[id] = {...lite, lite:true}; } }
+  const keys = Object.keys(mcache); if (keys.length > 1500) keys.sort((a,b)=>(mcache[a].fetched||0)-(mcache[b].fetched||0)).slice(0, keys.length-1500).forEach(k => delete mcache[k]);
+  LS.set('animes-media', mcache);
+}
+let frs = LS.get('animes-franchises', {});   // first id of a show -> every season, film and special of it
+let idRoot = new Map();
+function buildIdx(){ idRoot = new Map(); for (const [r,f] of Object.entries(frs)) for (const id of f.ids) idRoot.set(+id, +r); }
+buildIdx();
+function frOf(id){ id = +id; if (idRoot.has(id)) return idRoot.get(id); const e = entries.get(String(id)); return e && e.fr ? +e.fr : id; }
+function familyOf(id){ const r = idRoot.get(+id); return r!=null && frs[r] ? frs[r].ids.map(i => media.get(i)).filter(Boolean).sort((a,b)=>a.sd-b.sd) : null; }
+const frLoading = new Map();
+function loadFranchise(id){
+  id = +id;
+  const r = idRoot.get(id);
+  if (r!=null && frs[r] && Date.now()-frs[r].at < 14*DAY) return Promise.resolve(r);
+  if (frLoading.has(id)) return frLoading.get(id);
+  const p = (async () => {
+    const seen = new Set([id]); let frontier = [id]; const members = [];
+    for (let round=0; round<8 && frontier.length && seen.size<=60; round++){
+      const need = frontier.filter(i => { const m = media.get(i); return !(m && m.rel && Date.now()-(m.fetched||0) < 14*DAY); });
+      if (need.length){
+        const d = await anilist(`query($ids:[Int],$p:Int,$n:Int){ ${PAGE.replace('%ARGS%','id_in:$ids')} }`, {ids:need, p:1, n:50});
+        d.Page.media.forEach(compact);
+      }
+      const next = [];
+      for (const i of frontier){ const m = media.get(i); if (!m) continue; members.push(m); for (const x of m.rel||[]) if (!seen.has(x.id)){ seen.add(x.id); next.push(x.id); } }
+      frontier = next.slice(0, 50);
+    }
+    const keep = members.filter(m => m.f!=='MUSIC').sort((a,b)=>a.sd-b.sd);
+    if (!keep.length) return id;
+    const root = keep[0].id, ids = keep.map(m => m.id);
+    for (const k of Object.keys(frs)) if (frs[k].ids.some(i => ids.includes(i))) delete frs[k];
+    frs[root] = {ids, at:Date.now()}; LS.set('animes-franchises', frs); buildIdx(); saveMediaCache(ids);
+    let ch = false; for (const i of ids){ const e = entries.get(String(i)); if (e && e.fr!==root){ e.fr = root; ch = true; } }
+    if (ch) LS.set(K.entries, Object.fromEntries(entries));
+    return root;
+  })().catch(() => null).finally(() => frLoading.delete(id));
+  frLoading.set(id, p); return p;
+}
+// group the list little by little in the background, gently for AniList
+let frQueueOn = false;
+async function franchiseQueue(){
+  if (frQueueOn) return; frQueueOn = true;
+  try{
+    for (;;){
+      const e = [...entries.values()].find(e => { const r = idRoot.get(+e.id); return r==null || !frs[r] || Date.now()-frs[r].at > 14*DAY; });
+      if (!e || navigator.onLine===false) break;
+      const r = await loadFranchise(e.id); if (r==null) break;
+      render(); if (sheetId!=null) renderSheet();
+      await new Promise(ok => setTimeout(ok, 2500));
+    }
+  } finally { frQueueOn = false; }
+}
+function countLabel(ms){
+  const tv = ms.filter(m => !['MOVIE','SPECIAL','OVA','MUSIC'].includes(m.f)).length, films = ms.filter(m => m.f==='MOVIE').length, other = ms.length - tv - films;
+  return [tv && `${tv} saison${tv>1?'s':''}`, films && `${films} film${films>1?'s':''}`, other && `${other} spécia${other>1?'ux':'l'}`].filter(Boolean).join(', ');
 }
 const PAGE = `Page(page:$p, perPage:$n){ pageInfo{hasNextPage} media(%ARGS%, type:ANIME, isAdult:false){...M} }`;
 async function searchAnime(text, page=1){
@@ -337,7 +420,9 @@ function setEntry(m, patch){
   if (e.st==='done' && m.eps) e.ep = m.eps;
   if (!prev && e.st==='watching' && !e.started) e.started = Date.now();
   if (e.st==='done' && (!prev || prev.st!=='done')) e.finished = Date.now();
-  entries.set(id, e); saveEntries(); render(); return e;
+  entries.set(id, e); saveEntries(); render();
+  if (!prev) loadFranchise(m.id).then(() => { render(); if (sheetId!=null) renderSheet(); });
+  return e;
 }
 function removeEntry(id){
   const e = entries.get(String(id)); if (!e) return;
@@ -387,11 +472,12 @@ function posterCard(m, opts={}){
   const e = entries.get(String(m.id));
   const flag = opts.discover && e ? `<span class="flag">${esc(STATUS[e.st])}</span>` : '';
   const score = !opts.discover && e && e.score ? `<span class="score num">${e.score}/10</span>` : '';
+  const cnt = opts.group && opts.group.length>1 ? `<span class="cnt">${esc(countLabel(opts.group))}</span>` : '';
   const add = opts.discover && !e ? `<button class="add" type="button" data-add="${m.id}" aria-label="Ajouter ${esc(m.t)} à regarder">${ICON.plus}</button>` : '';
   return `<div class="poster-wrap" style="position:relative">
     <button class="poster" type="button" data-open="${m.id}">
-      <div class="cover" style="background-color:${esc(m.col||'')}">${coverImg(m)}${flag}${score}</div>
-      <span class="t">${esc(m.t)}</span><span class="s">${esc(subline(m))}</span>${platBadges(m)}
+      <div class="cover" style="background-color:${esc(m.col||'')}">${coverImg(m)}${flag}${score}${cnt}</div>
+      <span class="t">${esc(opts.title||m.t)}</span><span class="s">${esc(opts.sub||subline(m))}</span>${platBadges(m)}
     </button>${add}</div>`;
 }
 function nextLine(m){
@@ -446,6 +532,20 @@ function filtered(st){
     && (!ui.mine || onMine(e.m))
     && (!needle || [e.m&&e.m.t, e.m&&e.m.r, e.m&&e.m.n, e.note].some(s => String(s||'').toLowerCase().includes(needle))));
 }
+// group list entries of the same show, keeping the list order; the card shows the earliest season
+function groupedShelf(list, tab){
+  const g = new Map();
+  for (const e of list){ const k = frOf(e.id); if (!g.has(k)) g.set(k, []); g.get(k).push(e); }
+  return `<div class="shelf">${[...g.values()].map(es => {
+    const ms = es.map(e => e.m || {id:+e.id, t:'…', sd:0}).sort((a,b)=>(a.sd||0)-(b.sd||0));
+    const fam = familyOf(ms[0].id), head = fam ? fam[0] : null;
+    const scored = es.filter(e => e.score), avg = scored.length ? Math.round(scored.reduce((s,e)=>s+e.score,0)/scored.length) : 0;
+    const shown = ms[0];
+    const left = tab==='done' && fam ? fam.filter(x => { const e = entries.get(String(x.id)); return !e || (e.st!=='done' && e.st!=='dropped'); }) : [];
+    const html = posterCard(shown, {group:ms, title: ms.length>1 && head ? head.t : shown.t, sub: left.length ? `Encore ${countLabel(left)} à voir` : ''});
+    return ms.length>1 && avg ? html.replace(/<span class="score num">[^<]*<\/span>/, `<span class="score num">${avg}/10</span>`) : html;
+  }).join('')}</div>`;
+}
 function toolsBar(placeholder, sorts){
   return `<div class="tools">
     <label class="search">${ICON.search}<input type="search" id="q" placeholder="${esc(placeholder)}" value="${esc(q)}" autocomplete="off" enterkeyhint="search" aria-label="${esc(placeholder)}"></label>
@@ -492,15 +592,24 @@ function render(){
   else if (ui.tab==='watching') body = `<div class="rows">${list.map(watchRow).join('')}</div>`;
   else if (ui.tab==='done'){
     const done = list.filter(e=>e.st==='done'), drop = list.filter(e=>e.st==='dropped');
-    body = (done.length?`<div class="shelf">${done.map(e=>posterCard(e.m||{id:e.id,t:'…'})).join('')}</div>`:'')
-      + (drop.length?`<h2 class="sec">Abandonnés</h2><div class="shelf">${drop.map(e=>posterCard(e.m||{id:e.id,t:'…'})).join('')}</div>`:'');
+    body = (done.length?groupedShelf(done,'done'):'') + (drop.length?`<h2 class="sec">Abandonnés</h2>${groupedShelf(drop)}`:'');
   }
-  else body = `<div class="shelf">${list.map(e=>posterCard(e.m||{id:e.id,t:'…'})).join('')}</div>`;
+  else body = groupedShelf(list);
   main.innerHTML = toolsBar('Filtrer ma liste', SORTS) + body;
   if (hadFocus){ const i=$('#q'); i.focus(); try{ i.setSelectionRange(caret,caret); }catch(e){} }
 }
 
 /* discover: season + trending when the box is empty, AniList search otherwise */
+function discShelf(list){
+  const ids = new Set(list.map(m => m.id)), up = new Map(list.map(m => [m.id, m.id]));
+  const find = i => { while (up.get(i)!==i){ up.set(i, up.get(up.get(i))); i = up.get(i); } return i; };
+  for (const m of list){
+    for (const r of m.rel||[]) if (ids.has(r.id)) up.set(find(m.id), find(r.id));
+    const k = idRoot.get(m.id); if (k!=null) for (const o of list) if (o!==m && idRoot.get(o.id)===k) up.set(find(m.id), find(o.id));
+  }
+  const g = new Map(); for (const m of list){ const k = find(m.id); if (!g.has(k)) g.set(k, []); g.get(k).push(m); }
+  return `<div class="shelf">${[...g.values()].map(ms => { ms.sort((a,b)=>a.sd-b.sd); return posterCard(ms[0], {discover:true, group:ms}); }).join('')}</div>`;
+}
 const disc = {key:null, list:[], more:false, page:1, err:'', loading:false, season:null, trend:null};
 let searchT = null;
 function renderDiscover(){
@@ -514,12 +623,12 @@ function renderDiscover(){
     else if (disc.loading && !disc.list.length) body = `<p class="msg">Recherche…</p>`;
     else {
       const l = filt(disc.list);
-      body = l.length ? `<div class="shelf">${l.map(m=>posterCard(m,{discover:true})).join('')}</div>` : `<p class="msg">Aucun résultat${ui.mine?' sur tes plateformes':''} pour « ${esc(q.trim())} ».</p>`;
+      body = l.length ? discShelf(l) : `<p class="msg">Aucun résultat${ui.mine?' sur tes plateformes':''} pour « ${esc(q.trim())} ».</p>`;
       if (disc.more) body += `<div class="more"><button class="btn" type="button" id="moreRes">${disc.loading?'Chargement…':'Plus de résultats'}</button></div>`;
     }
   } else {
     const sec = (title, data) => `<h2 class="sec">${title}</h2>` + (!data ? `<p class="msg">Chargement…</p>` : data.err ? `<p class="msg bad">${esc(data.err)}</p>`
-      : (l => l.length ? `<div class="shelf">${l.map(m=>posterCard(m,{discover:true})).join('')}</div>` : `<p class="msg">Rien sur tes plateformes ici.</p>`)(filt(data.list)));
+      : (l => l.length ? discShelf(l) : `<p class="msg">Rien sur tes plateformes ici.</p>`)(filt(data.list)));
     body = sec(`Saison ${season==='SPRING'?'de ':'d’'}${SEASON_FR[season]} ${year}`, disc.season) + sec('Populaires en ce moment', disc.trend);
     loadHome();
   }
@@ -554,11 +663,13 @@ async function openSheet(id){
   let m = media.get(id);
   if (!m){ $('#sheet').innerHTML = `<button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button><p class="msg" style="padding:24px">Chargement…</p>`; }
   else renderSheet();
-  if (!m || Date.now()-(m.fetched||0) > 6*36e5){
+  if (!m || m.lite || Date.now()-(m.fetched||0) > 6*36e5){
     try{ await fetchOne(id); if (sheetId===id) renderSheet(); if (entries.has(String(id))) LS.set(K.entries, Object.fromEntries(entries)); }
     catch(e){ if (!m && sheetId===id) $('#sheet').innerHTML = `<button class="sh-close" type="button" data-close aria-label="Fermer">${ICON.close}</button><p class="msg bad" style="padding:24px">${esc(e.message)}</p>`; }
   }
   $('#sheet .sh-close') && $('#sheet .sh-close').focus();
+  const known = familyOf(id);
+  loadFranchise(id).then(() => { if (sheetId===id && JSON.stringify((familyOf(id)||[]).map(x=>x.id))!==JSON.stringify((known||[]).map(x=>x.id))) renderSheet(); else if (sheetId===id && !known) renderSheet(); });
 }
 function closeSheet(){
   sheetId = null; $('#scrim').hidden = true; $('#sheet').hidden = true; $('#sheet').innerHTML=''; document.body.style.overflow='';
@@ -600,6 +711,7 @@ function renderSheet(){
     <div class="sh-body">
       <div class="facts">${facts.map(f=>`<span class="fact">${esc(f)}</span>`).join('')}${m.g.map(g=>`<span class="fact">${esc(GENRE[g]||g)}</span>`).join('')}</div>
       ${nextLine(m)}
+      ${familyBlock(m)}
       ${you}
       <div class="block"><h3>Où le regarder</h3>
         <div class="where">${svc.length ? svc.map(s=>`<a class="svc" href="${esc(s.url)}" target="_blank" rel="noopener" style="--pc:${s.color}"><span class="dot"></span>${esc(s.name)}${s.langs.length?` <span class="lang">${esc(s.langs.join(', '))}</span>`:''}${prefs.platforms.includes(s.key)?'<span class="mine">Ton abonnement</span>':''}</a>`).join('') : `<p class="note">Aucune plateforme officielle connue pour ce titre.</p>`}</div>
@@ -608,6 +720,25 @@ function renderSheet(){
       ${m.d ? `<div class="block"><h3>Résumé <span class="note" style="display:inline">(en anglais, d’après AniList)</span></h3><p class="syn">${esc(m.d)}</p></div>`:''}
       <div class="links"><a class="btn small" href="${esc(m.url)}" target="_blank" rel="noopener">Fiche AniList</a>${e?`<button class="btn small danger" type="button" data-remove="${m.id}">Retirer de ma liste</button>`:''}</div>
     </div>`;
+}
+
+function familyBlock(m){
+  const fam = familyOf(m.id);
+  if (!fam){ return frLoading.has(m.id) || idRoot.get(m.id)==null ? `<p class="note" id="famWait">Recherche des autres saisons et films…</p>` : ''; }
+  if (fam.length<2) return '';
+  const missing = fam.filter(x => !entries.has(String(x.id)));
+  return `<div class="block"><h3>Saisons et films <span class="note" style="display:inline">(${esc(countLabel(fam))})</span></h3>
+    <div class="fam">${fam.map(x => {
+      const e = entries.get(String(x.id));
+      const act = e ? `<span class="tag st-${e.st}">${esc(STATUS[e.st])}${e.st==='watching'&&x.eps?` ${e.ep}/${x.eps}`:''}</span>`
+        : `<button class="mini" type="button" data-qadd="${x.id}:plan" aria-label="Ajouter ${esc(x.t)} à regarder">${ICON.plus}</button><button class="mini" type="button" data-qadd="${x.id}:done" aria-label="Marquer ${esc(x.t)} comme vu">${ICON.check}</button>`;
+      return `<div class="fam-row${x.id===m.id?' cur':''}">
+        <button class="fam-open" type="button" data-open="${x.id}" ${x.id===m.id?'aria-current="true"':''}>
+          <span class="thumb" style="background-color:${esc(x.col||'')}">${x.img?`<img src="${esc(x.img)}" alt="" loading="lazy">`:''}</span>
+          <span style="min-width:0"><span class="ft">${esc(x.t)}</span><span class="fs">${esc(subline(x))}</span></span>
+        </button><span class="fa">${act}</span></div>`;
+    }).join('')}</div>
+    ${missing.length ? `<div class="links" style="margin-top:10px"><button class="btn small" type="button" data-famall="plan">${ICON.plus} Tout ajouter à regarder</button><button class="btn small" type="button" data-famall="done">${ICON.check} Tout marquer comme vu</button></div>` : ''}</div>`;
 }
 
 /* ---------- settings sheet: platforms, sync, backup ---------- */
@@ -657,7 +788,7 @@ function renderSettings(){
 const GH = 'https://api.github.com', SYNC_FILE = 'animes.json';
 let sync = Object.assign({repo:'', token:'', last:0, err:''}, LS.get(K.sync, {}));
 let tomb = LS.get(K.deleted, {});
-const strip = e => { const {updated, m, ...r} = e; return JSON.stringify(r); };   // what counts as a change you made
+const strip = e => { const {updated, m, fr, ...r} = e; return JSON.stringify(r); };   // what counts as a change you made
 let snap = new Map([...entries].map(([id,e]) => [id, strip(e)]));
 function stampChanges(){
   const now = Date.now(); let ch = false;
@@ -796,6 +927,8 @@ document.addEventListener('click', ev => {
   if (d.st){ const m = media.get(sheetId); if (m){ setEntry(m, {st:d.st}); renderSheet(); } return; }
   if (d.score){ const e = entries.get(String(sheetId)); if (e){ const s = +d.score; setEntry(e.m, {score: e.score===s ? 0 : s}); renderSheet(); } return; }
   if (d.shstep){ const e = entries.get(String(sheetId)); if (e){ stepEp(e.id, e.ep + (+d.shstep)); renderSheet(); } return; }
+  if (d.qadd){ const [id, st] = d.qadd.split(':'); const x = media.get(+id); if (x){ setEntry(x, {st}); renderSheet(); } return; }
+  if (d.famall){ const fam = familyOf(sheetId) || []; const n = fam.filter(x => !entries.has(String(x.id))); n.forEach(x => setEntry(x, {st:d.famall})); renderSheet(); toast(`${n.length} ajouté${n.length>1?'s':''} ${d.famall==='done'?'dans Vus':'à regarder'}`); return; }
   if (d.remove){ closeSheet(); removeEntry(d.remove); return; }
   if (t.id==='mine'){ ui.mine = !ui.mine; saveUi(); render(); return; }
   if (t.id==='moreRes'){ if (!disc.loading) runSearch(disc.page+1); return; }
@@ -832,7 +965,7 @@ window.addEventListener('online', () => { if (syncOn()) runSync(); });
 /* ---------- start ---------- */
 render(); showSync();
 if (syncOn()) runSync();
-refreshList();
+refreshList().then(franchiseQueue);
 setInterval(() => { if (document.visibilityState==='visible' && ui.tab==='watching') render(); }, 60000);   // keeps "next episode" times current
 if ('serviceWorker' in navigator && location.protocol==='https:') navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
