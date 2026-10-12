@@ -160,7 +160,7 @@ function normMovie(x){
 function normHit(x, kind){
   kind = kind || x.media_type;
   return {key:`${kind}-${x.id}`, kind, id:x.id, t:kind==='tv'?x.name:x.title, ot:kind==='tv'?x.original_name:x.original_title, poster:x.poster_path,
-    yr:((kind==='tv'?x.first_air_date:x.release_date)||'').slice(0,4),
+    yr:((kind==='tv'?x.first_air_date:x.release_date)||'').slice(0,4), date:(kind==='tv'?x.first_air_date:x.release_date)||'',
     anime:(x.genre_ids||[]).includes(16) && (x.original_language==='ja' || (x.origin_country||[]).includes('JP')), pop:x.popularity||0};
 }
 // show details, kept on this device for a while (airing shows refresh twice a day)
@@ -501,6 +501,7 @@ function toolsBar(placeholder, sorts, extra=''){
 function summary(){
   const all = [...entries.values()];
   const n = st => all.filter(e => e.st===st).length;
+  const nb = document.querySelector('[data-news]'); if (nb) nb.textContent = newsItems().filter(x => x.kind==='new').length || '';
   document.querySelectorAll('[data-c]').forEach(el => { const c = el.dataset.c==='done' ? n('done')+n('dropped') : el.dataset.c==='friends' ? requests.length : n(el.dataset.c); el.textContent = c||''; });
   if (!me){ $('#summary').textContent = ''; return; }
   const eps = all.reduce((s,e) => s + (e.kind==='tv' ? watchedTotal(e) : 0), 0);
@@ -533,6 +534,37 @@ function render(){
     else main.innerHTML = listView();
   });
 }
+/* seen shows that got new episodes, or a new season announced */
+function newsItems(){
+  const out = [];
+  for (const [k,e] of entries){
+    if (e.st!=='done' || e.kind!=='tv') continue;
+    const d = dcache[k]; if (!d) continue;
+    const aired = airedTotal(d), watched = watchedTotal(e), fresh = aired - watched;
+    if (fresh > 0 && aired > (e.newAck||0)){
+      const s = d.seasons.find(x => ((e.w||{})[x.n]||0) < airedIn(d, x.n));
+      out.push({k, e, d, kind:'new', fresh, season:s, airing: !!(d.next && s && d.next.s===s.n)});
+      continue;
+    }
+    const soon = d.seasons.find(x => x.air && x.air > today() && ((e.w||{})[x.n]||0)===0);
+    if (soon && e.ackSoon!==soon.n) out.push({k, e, d, kind:'soon', season:soon});
+  }
+  return out.sort((a,b) => (a.kind==='new'?0:1)-(b.kind==='new'?0:1));
+}
+function newsBlock(){
+  const items = newsItems(); if (!items.length) return '';
+  return `<section class="news"><h2 class="sec" style="margin-top:0">Nouveautés pour tes animes vus</h2><div class="news-list">${items.map(x => {
+    const name = x.season ? (x.season.n && x.d.seasons.length>1 ? `Saison ${x.season.n}` : 'Nouveaux épisodes') : '';
+    const line = x.kind==='new'
+      ? `${esc(name)}${x.airing?' en cours de diffusion':' disponible'}, ${plural(x.fresh,'nouvel épisode','nouveaux épisodes')}${x.d.next?`. ${esc(nextLine(x.d).replace(/<[^>]+>/g,''))}`:''}`
+      : `Saison ${x.season.n} annoncée, sortie ${esc(fmtDay(x.season.air))}${x.season.air.slice(0,4)!==String(new Date().getFullYear())?' '+x.season.air.slice(0,4):''}`;
+    return `<article class="news-item${x.kind==='soon'?' soon':''}">
+      <div class="cover" data-open="${x.k}">${x.e.m&&x.e.m.poster?`<img src="${esc(IMG(x.e.m.poster,'w185'))}" alt="" loading="lazy">`:''}</div>
+      <div style="min-width:0"><h3 data-open="${x.k}" tabindex="0" role="button">${esc(x.d.t)}</h3><p class="news-l">${line}</p>
+        <div class="links">${x.kind==='new' ? `<button class="btn small primary" type="button" data-resume="${x.k}">${ICON.plus} Reprendre</button><button class="btn small" type="button" data-later="${x.k}">Plus tard</button>`
+          : `<button class="btn small" type="button" data-later="${x.k}">OK, compris</button>`}</div></div></article>`;
+  }).join('')}</div></section>`;
+}
 function listView(){
   if (!listReady) return `<p class="msg">Chargement de ta liste…</p>`;
   const SORTS = {
@@ -542,7 +574,8 @@ function listView(){
   }[ui.tab];
   if (!SORTS.some(s => s[0]===ui.sort)) ui.sort = 'recent';
   const total = [...entries.values()].filter(e => ui.tab==='done' ? (e.st==='done'||e.st==='dropped') : e.st===ui.tab).length;
-  if (!total) return ui.tab==='watching' ? emptyState('Rien en cours', 'Commence un anime de ta liste « À regarder », ou trouve-en un nouveau.', goDiscover)
+  const news = ui.tab==='watching' ? newsBlock() : '';
+  if (!total) return ui.tab==='watching' ? news + emptyState('Rien en cours', 'Commence un anime de ta liste « À regarder », ou trouve-en un nouveau.', goDiscover)
     : ui.tab==='plan' ? emptyState('Ta liste d’envies est vide', 'Ajoute les animes que tu veux voir : tu sauras où ils sont dispos en France.', goDiscover)
     : emptyState('Aucun anime vu pour l’instant', 'Ajoute ceux que tu as déjà regardés pour les noter et les recommander à tes amis.', goDiscover);
   const list = sortList(myFiltered(ui.tab));
@@ -555,7 +588,7 @@ function listView(){
     body = (done.length?shelf(done):'') + (drop.length?`<h2 class="sec">Abandonnés</h2>${shelf(drop)}`:'');
   }
   else body = `<div class="shelf">${list.map(([k,e]) => posterCard(k, e.m||{t:'…'})).join('')}</div>`;
-  return toolsBar('Filtrer ma liste', SORTS) + body;
+  return news + toolsBar('Filtrer ma liste', SORTS) + body;
 }
 
 /* discover */
@@ -950,8 +983,26 @@ function seasonsBlock(key, d, e){
       <div class="pick-foot"><span class="links"><button class="btn small" type="button" data-pick="all">Tout cocher</button><button class="btn small" type="button" data-pick="none">Tout décocher</button></span>
         <span class="links"><button class="btn" type="button" data-pick="cancel">Annuler</button><button class="btn primary" type="button" data-pick="ok">${ICON.check} Valider</button></span></div></div>`;
   }
-  return `<div class="block"><h3>Saisons${d.seasons.length?` <span class="note" style="display:inline">(${plural(d.seasons.length,'saison','saisons')}, ${d.total} épisodes)</span>`:''}</h3>
-    <div class="seasons">${all.map(s => {
+  const fl = filmsFor(key);
+  const dateOf = it => it.f ? (it.f.date || (it.f.yr ? it.f.yr+'-12-31' : '9999')) : (it.s.n===0 ? '9999-99' : (it.s.air || '9998'));
+  const items = [...all.map(s => ({s})), ...fl.shown.map(f => ({f}))].sort((a,b) => dateOf(a).localeCompare(dateOf(b)));
+  const filmRow = (h, i) => {
+    const fe = entries.get(h.key);
+    const prev = items.slice(0, i).reverse().find(x => x.s && x.s.n>0), next = items.slice(i+1).find(x => x.s && x.s.n>0);
+    const where = prev && next ? `entre la saison ${prev.s.n} et la saison ${next.s.n}` : prev && d.seasons.length>1 ? `après la saison ${prev.s.n}` : !prev && next ? 'avant la série' : '';
+    const seen = fe && fe.st==='done';
+    const mark = seen ? `<button class="s-mark on" type="button" data-fmark="${h.key}|plan" aria-pressed="true" aria-label="Décocher ${esc(h.t)}">${ICON.check} Vu</button>`
+      : `<button class="s-mark" type="button" data-fmark="${h.key}|done" aria-pressed="false" aria-label="Marquer ${esc(h.t)} comme vu">Marquer vu</button>`;
+    // on the show's page its name is implied: "Fire Force : Les débuts" reads "Les débuts"
+    const short = (() => { for (const nm of [d.t, d.ot]){ if (!nm) continue; const b = baseName(nm); const t = String(h.t); if (b && fold(t).startsWith(b)){ const rest = t.slice(b.length).replace(/^[\s:：\-–—,.]+/, ''); let r = rest.replace(/^(le |the )?(film|movie)\s*(\d*)\s*[-:：–—]\s*/i, (m0, a1, a2, n) => n ? `${n} : ` : ''); if (r.length<3) r = rest; if (r.length>=3) return r.charAt(0).toUpperCase()+r.slice(1); } } return h.t; })();
+    return `<div class="season film${seen?' seen':''}"><div class="season-hd">
+      <button class="fam-open" type="button" data-open="${h.key}" title="Ouvrir la page du film">
+        <span class="thumb">${h.poster?`<img src="${esc(IMG(h.poster,'w92'))}" alt="" loading="lazy">`:''}</span>
+        <span style="min-width:0"><span class="ft"><span class="kind">Film</span> ${esc(short)}</span><span class="fs">${h.yr||'Date inconnue'}${where?`, ${where}`:''}</span></span>
+      </button><span class="fa">${mark}</span></div></div>`;
+  };
+  return `<div class="block"><h3>${fl.list.length ? 'Saisons et films' : 'Saisons'}${d.seasons.length?` <span class="note" style="display:inline">(${plural(d.seasons.length,'saison','saisons')}${fl.list.length?`, ${plural(fl.list.length,'film','films')}`:''})</span>`:''}</h3>
+    <div class="seasons">${items.map((it, i) => { if (it.f) return filmRow(it.f, i); const s = it.s; return (() => {
       const w = e ? ((e.w||{})[s.n]||0) : 0, aired = s.n===0 ? s.eps : airedIn(d, s.n), full = w>=s.eps && s.eps>0, open = openSeason===s.n;
       const sub = [e && w && !full ? `${w} sur ${s.eps} vus` : plural(s.eps,'épisode','épisodes'), s.air ? (s.air > today() ? `sortie ${fmtDay(s.air)}` : s.air.slice(0,4)) : '', aired<s.eps && aired>0 ? `${aired} sortis` : ''].filter(Boolean).join(', ');
       const mark = aired===0 && !full ? `<span class="s-mark off">Pas encore sortie</span>`
@@ -966,13 +1017,22 @@ function seasonsBlock(key, d, e){
           ${mark}
         </div>
         ${open ? (e ? pipsFor(key, d, e, s.n) : `<p class="note" style="padding:0 12px 12px">Coche « Marquer vue », ou ajoute l’anime à ta liste pour cocher épisode par épisode.</p>`) : ''}
-      </div>`;
-    }).join('')}</div>
-    <p class="note" style="margin-top:6px">Touche une saison pour cocher ses épisodes un par un.${hasSp ? ` <button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Afficher les épisodes spéciaux (${d.specials.eps})`}</button>` : ''}</p></div>`;
+      </div>`; })(); }).join('')}</div>
+    ${fl.hidden ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Voir les ${fl.hidden} autres films (récaps, éditions spéciales…)</button>` : fl.list.length>3 ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Afficher moins de films</button>` : ''}
+    <p class="note" style="margin-top:6px">Rangés par date de sortie. Touche une saison pour cocher ses épisodes un par un.${hasSp ? ` <button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Afficher les épisodes spéciaux (${d.specials.eps})`}</button>` : ''}</p></div>`;
 }
 /* films: only the best-known three by default (in release order), the rest folded behind a link */
 const allFilms = new Set();
+function filmsFor(key){
+  const seen = new Set([key]);
+  const list = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => h.kind==='movie' && !seen.has(h.key) && seen.add(h.key));
+  const ranked = [...list].sort((a,b) => (entries.has(b.key)-entries.has(a.key)) || ((b.pop||0)-(a.pop||0)) || ((b.poster?1:0)-(a.poster?1:0)));
+  const open = allFilms.has(key) || list.length<=3;
+  const shown = open ? list : ranked.slice(0, 3);
+  return {list, shown, hidden:list.length - shown.length, open};
+}
 function relatedBlock(key, d){
+  if (d.kind==='tv') return '';   // a show's films sit in its seasons timeline
   const seen = new Set([key]);
   const list = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => !seen.has(h.key) && seen.add(h.key));
   if (!list.length) return '';
@@ -1258,6 +1318,10 @@ document.addEventListener('click', async ev => {
   if (d.sall){ const [key, n, v] = d.sall.split('|'), dd = dcache[key];
     if (!entries.has(key)){ if (dd && dd.seasons.length<=1 && +n>0){ setStatus(key, 'done'); return; } addFrom(key, 'watching'); }
     setEp(key, +n, +v); return; }
+  if (d.resume){ const x = entries.get(d.resume); if (x){ save(d.resume, {st:'watching', started:Date.now()}); toast(`${x.m?x.m.t:'Anime'} est dans En cours`); } return; }
+  if (d.later){ const x = entries.get(d.later), dd = dcache[d.later]; if (x && dd){ const soon = dd.seasons.find(s => s.air && s.air > today() && ((x.w||{})[s.n]||0)===0);
+      save(d.later, airedTotal(dd) > watchedTotal(x) ? {newAck:airedTotal(dd)} : {ackSoon: soon ? soon.n : 0}); } return; }
+  if (d.fmark){ const [fk, st] = d.fmark.split('|'); if (st==='plan' && entries.get(fk)) save(fk, {st:'plan'}); else setStatus(fk, st); return; }
   if (d.films){ allFilms.has(d.films) ? allFilms.delete(d.films) : allFilms.add(d.films); renderSheet(); return; }
   if (d.specials!==undefined){ showSpecials = !showSpecials; renderSheet(); return; }
   if (d.picks!==undefined){ const n = +d.picks; pick.sel.has(n) ? pick.sel.delete(n) : pick.sel.add(n); renderSheet(); return; }
@@ -1354,7 +1418,8 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 let refreshing = false;
 async function refreshDetails(){
   if (refreshing) return; refreshing = true;
-  const keys = [...entries.entries()].filter(([k,e]) => !fresh(dcache[k]) && (e.st==='watching' || !dcache[k] || e.st==='done')).map(([k]) => k);
+  const stale = ([k,e]) => { const d = dcache[k]; if (!d) return true; if (!fresh(d)) return e.st!=='plan' || !d; return e.st==='done' && d.kind==='tv' && Date.now()-d.at > 2*DAY; };
+  const keys = [...entries.entries()].filter(stale).map(([k]) => k);
   for (const k of keys){ try{ await details(k); }catch(e){ if (e.message.includes('Clé')) break; } await new Promise(r => setTimeout(r, 120)); }
   refreshing = false; if (keys.length) render();
 }
