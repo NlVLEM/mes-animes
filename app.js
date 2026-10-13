@@ -578,9 +578,29 @@ function watchRow(key, e){
       ${pipsFor(key, d, e, n)}
     </div></article>`;
 }
+/* which tabs an anime appears in, from the state of each of its seasons:
+   a season seen -> Vus, a season in progress -> En cours, a season out but not started -> À regarder */
+function tabsOf(k, e){
+  if (e.st==='dropped') return new Set(['dropped']);
+  const d = dcache[k];
+  if (e.kind!=='tv' || !d) return new Set([e.st]);
+  const set = new Set();
+  for (const s of d.seasons){
+    if (skipped(e, s.n)) continue;
+    const st = seasonState(d, e, s.n);
+    if (st==='done') set.add('done');
+    else if (st==='watching') set.add('watching');
+    else if (st==='plan' && airedIn(d, s.n) > 0) set.add('plan');
+  }
+  if (e.st==='watching' && !set.has('watching') && !set.has('done')){ set.add('watching'); set.delete('plan'); }   // « En cours » chosen before ticking anything
+  if (e.st==='done' && !set.has('done') && !set.size) set.add('done');
+  if (!set.size) set.add(e.st);
+  return set;
+}
+const inTab = (k, e, tab) => { const t = tabsOf(k, e); return tab==='done' ? (t.has('done') || t.has('dropped')) : t.has(tab); };
 function myFiltered(st){
   const needle = q.trim().toLowerCase();
-  return [...entries.entries()].filter(([k,e]) => (st==='done' ? (e.st==='done'||e.st==='dropped') : e.st===st)
+  return [...entries.entries()].filter(([k,e]) => inTab(k, e, st)
     && (!ui.mine || ((e.m&&e.m.pv)||[]).some(p => myPlatforms().includes(p)))
     && (!ui.tag || hasTag(dcache[k], tagOf(ui.tag)))
     && (!needle || [e.m&&e.m.t, e.note].some(s => String(s||'').toLowerCase().includes(needle))));
@@ -605,7 +625,7 @@ function toolsBar(placeholder, sorts, extra=''){
 }
 function summary(){
   const all = [...entries.values()];
-  const n = st => all.filter(e => e.st===st).length;
+  const n = st => [...entries.entries()].filter(([k,e]) => st==='dropped' ? e.st==='dropped' : st==='done' ? tabsOf(k,e).has('done') : inTab(k, e, st)).length;
   const nb = document.querySelector('[data-news]'); if (nb) nb.textContent = newsItems().filter(x => x.kind==='new').length || '';
   document.querySelectorAll('[data-c]').forEach(el => { const c = el.dataset.c==='done' ? n('done')+n('dropped') : el.dataset.c==='friends' ? requests.length : n(el.dataset.c); el.textContent = c||''; });
   if (!me){ $('#summary').textContent = ''; return; }
@@ -678,7 +698,7 @@ function listView(){
     done:[['recent','Récents'],['score','Ma note'],['title','Titre']]
   }[ui.tab];
   if (!SORTS.some(s => s[0]===ui.sort)) ui.sort = 'recent';
-  const total = [...entries.values()].filter(e => ui.tab==='done' ? (e.st==='done'||e.st==='dropped') : e.st===ui.tab).length;
+  const total = [...entries.entries()].filter(([k,e]) => inTab(k, e, ui.tab)).length;
   const news = ui.tab==='watching' ? newsBlock() : '';
   if (!total) return ui.tab==='watching' ? news + emptyState('Rien en cours', '', goDiscover)
     : ui.tab==='plan' ? emptyState('Rien à regarder', '', goDiscover)
@@ -688,11 +708,13 @@ function listView(){
   if (!list.length) body = `<p class="msg">Aucun anime ne correspond.</p>`;
   else if (ui.tab==='watching') body = `<div class="rows">${list.map(([k,e]) => watchRow(k,e)).join('')}</div>`;
   else if (ui.tab==='done'){
-    const done = list.filter(([,e]) => e.st==='done'), drop = list.filter(([,e]) => e.st==='dropped');
+    const done = list.filter(([,e]) => e.st!=='dropped'), drop = list.filter(([,e]) => e.st==='dropped');
     const shelf = l => `<div class="shelf">${l.map(([k,e]) => posterCard(k, e.m||{t:'…'}, {heart:e.reco})).join('')}</div>`;
     body = (done.length?shelf(done):'') + (drop.length?`<h2 class="sec">Abandonnés</h2>${shelf(drop)}`:'');
   }
-  else body = `<div class="shelf">${list.map(([k,e]) => posterCard(k, e.m||{t:'…'})).join('')}</div>`;
+  else body = `<div class="shelf">${list.map(([k,e]) => { const d = dcache[k];
+    const next = d && d.kind==='tv' && tabsOf(k,e).has('done') ? d.seasons.find(x => !skipped(e, x.n) && seasonState(d, e, x.n)==='plan' && airedIn(d, x.n) > 0) : null;
+    return posterCard(k, e.m||{t:'…'}, next ? {sub:`Saison ${next.n} à voir`} : {}); }).join('')}</div>`;
   return news + toolsBar('Filtrer ma liste', SORTS) + body;
 }
 
