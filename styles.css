@@ -503,3 +503,10 @@ button.pf-count[aria-expanded="true"]{border-color:var(--accent);background:var(
 /* phone: one row you swipe (no visible bar); computer: every tag shown on several lines */
 .tagbar{scrollbar-width:none;-ms-overflow-style:none}
 @media (min-width:621px){.tagbar{flex-wrap:wrap;overflow:visible;padding-bottom:0}.tagbar .chip{padding:5px 12px;font-size:13px}}
+/* seasons aired in parts */
+.parts{display:grid;gap:8px;margin-top:10px}
+.parts .strip{margin-top:4px}
+.part-l{font-size:12px;font-weight:700;color:var(--ink-3)}
+.season .parts{padding:0 10px 12px;margin-top:0}
+.season .parts .strip{padding:0}
+@media (max-width:520px){.tools .toggle{flex:none;white-space:nowrap;padding:9px 12px}.tools #tagf,.tools #sort{flex:1 1 0;min-width:0;text-overflow:ellipsis}}

@@ -221,6 +221,7 @@ function details(key, force){
     const x = await tmdb(`/${kind}/${id}`, {append_to_response:'watch/providers,keywords'});
     const d = kind==='tv' ? normTv(x) : normMovie(x);
     if (!d.ov){ try{ const en = await tmdb(`/${kind}/${id}`, {language:'en-US'}); d.ov = en.overview||''; d.ovEn = !!d.ov; }catch(e){} }
+    if (dcache[key] && dcache[key].parts) d.parts = dcache[key].parts;   // keep the known split of seasons into parts
     dcache[key] = d; saveDcache();
     const e = entries.get(key); if (e){ const m = snapOf(d); if (JSON.stringify(m)!==JSON.stringify(e.m)) save(key, {m}, {quiet:true}); }
     return d;
@@ -526,12 +527,37 @@ function pipsFor(key, d, e, n){
   const s = n===0 ? d.specials : d.seasons.find(x => x.n===n); if (!s) return '';
   const w = (e.w||{})[n]||0, aired = n===0 ? s.eps : airedIn(d, n);
   if (s.eps > 60) return `<div class="bar" aria-hidden="true"><i style="width:${Math.min(100, w/(s.eps||1)*100)}%"></i></div>`;
-  let pips = '';
-  for (let i=1; i<=s.eps; i++){
-    const future = i>aired;
-    pips += `<button class="pip${i<=w?' on':''}${future?' future':''}" type="button" data-ep="${key}|${n}|${i}" ${future?'disabled':''} aria-label="Épisode ${i}${future?' (pas encore sorti)':''}" aria-pressed="${i<=w}">${i}</button>`;
+  const starts = n>0 ? partsOf(key, d, s) : [1];
+  const pip = i => { const future = i>aired;
+    return `<button class="pip${i<=w?' on':''}${future?' future':''}" type="button" data-ep="${key}|${n}|${i}" ${future?'disabled':''} aria-label="Épisode ${i}${future?' (pas encore sorti)':''}" aria-pressed="${i<=w}">${i}</button>`; };
+  if (starts.length<2){
+    let pips = ''; for (let i=1; i<=s.eps; i++) pips += pip(i);
+    return `<div class="strip" role="group" aria-label="Épisodes vus, ${esc(s.name||'saison '+n)}">${pips}</div>`;
   }
-  return `<div class="strip" role="group" aria-label="Épisodes vus, ${esc(s.name||'saison '+n)}">${pips}</div>`;
+  return `<div class="parts">${starts.map((st, p) => {
+    const end = (starts[p+1] || s.eps+1) - 1; let pips = ''; for (let i=st; i<=end; i++) pips += pip(i);
+    return `<div class="part"><span class="part-l">Partie ${p+1}</span><div class="strip" role="group" aria-label="Partie ${p+1}">${pips}</div></div>`;
+  }).join('')}</div>`;
+}
+// a season aired in two (or more) parts: a pause of more than 40 days between two episodes starts a new part
+const partsLoading = new Set();
+function partsOf(key, d, s){
+  const tag = `${s.n}:${s.eps}`, known = d.parts && d.parts[tag];
+  if (known) return known;
+  if (s.eps < 4 || partsLoading.has(key+tag)) return [1];
+  partsLoading.add(key+tag);
+  tmdb(`/tv/${d.id}/season/${s.n}`).then(j => {
+    const eps = (j.episodes||[]).filter(x => x.episode_number>0).sort((a,b)=>a.episode_number-b.episode_number);
+    const starts = [1];
+    for (let i=1; i<eps.length; i++){
+      const a = eps[i-1].air_date, b = eps[i].air_date;
+      if (a && b && (new Date(b) - new Date(a)) > 40*DAY) starts.push(eps[i].episode_number);
+    }
+    const cur = dcache[key]; if (!cur) return;
+    cur.parts = {...(cur.parts||{}), [tag]:starts}; saveDcache();
+    if (starts.length>1){ render(); if (sheetId===key) renderSheet(); }
+  }).catch(() => {}).finally(() => partsLoading.delete(key+tag));
+  return [1];
 }
 function watchRow(key, e){
   const m = e.m || {t:'…'}, d = dcache[key];
