@@ -1167,8 +1167,8 @@ function seasonsBlock(key, d, e){
         </div>
         ${open ? (e ? pipsFor(key, d, e, s.n) : '') : ''}
       </div>`; })(); }).join('')}</div>
-    ${fl.hidden ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Autres (${fl.hidden})</button>` : fl.open && fl.list.length>fl.main.length ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Masquer les autres</button>` : ''}
-    ${hasSp ? `<p class="note" style="margin-top:6px"><button class="link-inline" type="button" data-specials>${showSpecials ? 'Masquer les épisodes spéciaux' : `Épisodes spéciaux (${d.specials.eps})`}</button></p>` : ''}</div>`;
+
+    </div>`;
 }
 /* films: only the best-known three by default (in release order), the rest folded behind a link */
 const allFilms = new Set();
@@ -1181,7 +1181,7 @@ function filmsFor(key){
   const main = all.filter(h => entries.has(h.key) || !isExtra(h)), extras = all.filter(h => !entries.has(h.key) && isExtra(h));
   const ranked = [...main].sort((a,b) => (entries.has(b.key)-entries.has(a.key)) || ((b.pop||0)-(a.pop||0)) || ((b.poster?1:0)-(a.poster?1:0)));
   const open = allFilms.has(key);
-  const shown = open ? [...main, ...extras] : (main.length<=3 ? main : ranked.slice(0, 3));
+  const shown = main.length<=4 ? main : ranked.slice(0, 4);
   return {list:all, main, extras, shown, hidden:all.length - shown.length, open};
 }
 function relatedBlock(key, d){
