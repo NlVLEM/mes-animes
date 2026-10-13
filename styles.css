@@ -500,6 +500,6 @@ button.pf-count[aria-expanded="true"]{border-color:var(--accent);background:var(
 .tagbar .chip{border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:999px;cursor:pointer;font-family:inherit}
 .tagbar .chip:hover{border-color:var(--ink-3)}
 .tagbar .chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-/* all tags visible, wrapped on several lines, no scrolling */
-.tagbar{flex-wrap:wrap;overflow:visible;padding-bottom:0}
-.tagbar .chip{padding:5px 12px;font-size:13px}
+/* phone: one row you swipe (no visible bar); computer: every tag shown on several lines */
+.tagbar{scrollbar-width:none;-ms-overflow-style:none}
+@media (min-width:621px){.tagbar{flex-wrap:wrap;overflow:visible;padding-bottom:0}.tagbar .chip{padding:5px 12px;font-size:13px}}
