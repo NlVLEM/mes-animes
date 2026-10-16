@@ -1078,9 +1078,14 @@ async function loadRelated(key){
   relCache.set(key, null);
   try{
     let list = [];
-    if (d.kind==='movie' && d.coll){
-      const c = await tmdb(`/collection/${d.coll.id}`);
-      list = (c.parts||[]).map(x => normHit(x,'movie')).filter(h => h.key!==key);
+    if (d.kind==='movie'){
+      if (d.coll){ const c = await tmdb(`/collection/${d.coll.id}`); list = (c.parts||[]).map(x => normHit(x,'movie')).filter(h => h.key!==key); }
+      const nm = baseName(d.t);
+      if (nm.length>=3){
+        const r = await tmdb('/search/tv', {query:nm}).catch(() => ({results:[]}));
+        const show = (r.results||[]).map(x => normHit(x,'tv')).filter(h => h.anime && sameStory(d, {t:h.t, ot:h.ot}) && !/compilation|総集/i.test(h.t+' '+h.ot)).sort((a,b) => b.pop-a.pop)[0];
+        if (show) list.unshift(show);
+      }
     } else {
       const base = s => String(s||'').toLowerCase().split(/[:：\-–(]/)[0].replace(/\b(the|saison|season)\b.*$/,'').trim();
       const names = [...new Set([base(d.t), base(d.ot)].filter(s => s.length>=3))];
@@ -1249,7 +1254,7 @@ function seasonsBlock(key, d, e){
 const allFilms = new Set();
 // compilations of episodes shown in cinemas, recaps, making-of, concerts: not real films of the story
 const EXTRA = /world ?tour|compilation|compil|r[ée]cap|digest|special edition|[ée]dition sp[ée]ciale|making|behind the|concert|\blive\b|stage|event|projection|\bto the\b|en route vers|総集編|特別編|ワールドツアー|上映|ライブ/i;
-const isExtra = h => EXTRA.test(h.t||'') || EXTRA.test(h.ot2||'') || (h.vc<3 && (h.pop||0)<1.5);
+const isExtra = h => EXTRA.test(h.t||'') || EXTRA.test(h.ot2||'') || (h.vc<3 && (h.pop||0)<1.5) || (!h.date && !h.vc);   // no date and no votes: only a rumour so far
 function filmsFor(key){
   const seen = new Set([key]);
   const all = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => h.kind==='movie' && (!h.lang || h.lang==='ja') && !seen.has(h.key) && seen.add(h.key));
@@ -1262,23 +1267,21 @@ function filmsFor(key){
 function relatedBlock(key, d){
   if (d.kind==='tv') return '';   // a show's films sit in its seasons timeline
   const seen = new Set([key]);
-  const list = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => !seen.has(h.key) && seen.add(h.key));
+  const list = [...(relCache.get(key)||[]), ...(groupMembers.get(key)||[])].filter(h => !seen.has(h.key) && seen.add(h.key)).filter(h => h.kind==='tv' || entries.has(h.key) || !isExtra(h));
   if (!list.length) return '';
-  const byYear = (a,b) => (a.yr||'9999').localeCompare(b.yr||'9999');
+  const byYear = (a,b) => (a.kind==='tv'?-1:0)-(b.kind==='tv'?-1:0) || (a.yr||'9999').localeCompare(b.yr||'9999');
   // films I already have stay visible, then the most popular ones
   const ranked = [...list].sort((a,b) => (entries.has(b.key)-entries.has(a.key)) || ((b.pop||0)-(a.pop||0)) || ((b.poster?1:0)-(a.poster?1:0)));
-  const open = allFilms.has(key) || list.length<=4;
-  const shown = (open ? list : ranked.slice(0, 3)).sort(byYear), hidden = list.length - shown.length;
-  return `<div class="block"><h3>${d.kind==='tv'?'Films':'Dans la même série'} <span class="note" style="display:inline">(${list.length})</span></h3>
+  const shown = ranked.slice(0, 5).sort(byYear);
+  return `<div class="block"><h3>Dans la même série</h3>
     <div class="fam films">${shown.map(h => {
       const e = entries.get(h.key);
       const act = e ? `<span class="tag st-${e.st}">${esc(STATUS[e.st])}</span>`
         : `<button class="mini" type="button" data-st="${h.key}|plan" aria-label="Ajouter ${esc(h.t)} à regarder" title="À regarder">${ICON.plus}</button><button class="mini" type="button" data-st="${h.key}|done" aria-label="Marquer ${esc(h.t)} comme vu" title="Déjà vu">${ICON.check}</button>`;
       return `<div class="fam-row"><button class="fam-open" type="button" data-open="${h.key}">
           <span class="thumb">${h.poster?`<img src="${esc(IMG(h.poster,'w92'))}" alt="" loading="lazy">`:''}</span>
-          <span style="min-width:0"><span class="ft">${esc(h.t)}</span><span class="fs">${h.yr||'Date inconnue'}</span></span></button><span class="fa">${act}</span></div>`;
-    }).join('')}</div>
-    ${hidden ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Voir les ${plural(hidden,'autre film','autres films').replace(/^(\d+) /,'$1 ')}</button>` : list.length>4 ? `<button class="link-inline" type="button" data-films="${key}" style="margin-top:8px">Afficher moins</button>` : ''}</div>`;
+          <span style="min-width:0"><span class="ft"><span class="kind">${h.kind==='tv'?'Série':'Film'}</span> ${esc(h.t)}</span><span class="fs">${h.yr||''}</span></span></button><span class="fa">${act}</span></div>`;
+    }).join('')}</div></div>`;
 }
 /* comments: anyone who can see a review can comment it, its author can answer; the database rules check it */
 const comments = new Map();     // 'owner|key' -> [{id, uid, pseudo, text, at}] (null while loading)
