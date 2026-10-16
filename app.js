@@ -210,20 +210,68 @@ function saveDcache(){
   if (keys.length > 250) keys.sort((a,b)=>dcache[a].at-dcache[b].at).slice(0, keys.length-250).forEach(k => delete dcache[k]);
   if (!LS.set('animes-tmdb', dcache)){ dcache = {}; LS.set('animes-tmdb', dcache); }
 }
-const fresh = d => d && Date.now()-d.at < ((d.kind==='tv' && d.status==='Returning Series') ? DAY/2 : 7*DAY);
+const fresh = d => d && (d.kind!=='tv' || d.vchk) && Date.now()-d.at < ((d.kind==='tv' && d.status==='Returning Series') ? DAY/2 : 7*DAY);
 const loadingD = new Map();
+/* TMDB sometimes files two broadcast seasons as one (Solo Leveling: "season 1" = 25 episodes).
+   When it also offers a "Seasons" episode group that cuts them properly, the site uses that cut. */
+async function realSeasons(d, x){
+  d.vchk = true;
+  const reg = d.seasons.length;
+  const cands = ((x.episode_groups && x.episode_groups.results) || [])
+    .filter(g => /season|saison|staffel|シーズン/i.test(g.name||'') && g.group_count > reg && g.group_count <= reg + 12)
+    .sort((a,b) => (b.type===6)-(a.type===6) || b.group_count-a.group_count);
+  for (const c of cands.slice(0, 2)){
+    let j; try{ j = await tmdb(`/tv/episode_group/${c.id}`); }catch(e){ continue; }
+    const groups = (j.groups||[]).filter(g => !/special|spécia|ova|extra/i.test(g.name||'')).sort((a,b) => a.order-b.order);
+    const vs = []; let ok = true;
+    for (const g of groups){
+      const eps = (g.episodes||[]).slice().sort((a,b) => a.order-b.order);
+      if (!eps.length){ continue; }
+      const sn = eps[0].season_number;
+      if (!sn || eps.some((e2, i) => e2.season_number!==sn || (i && e2.episode_number!==eps[i-1].episode_number+1))){ ok = false; break; }
+      const from = eps[0].episode_number, to = eps[eps.length-1].episode_number;
+      const starts = [1];
+      for (let i=1; i<eps.length; i++){ const a = eps[i-1].air_date, b = eps[i].air_date; if (a && b && (new Date(b)-new Date(a)) > 40*DAY) starts.push(i+1); }
+      const src = d.seasons.find(s2 => s2.n===sn) || {};
+      vs.push({n:vs.length+1, eps:eps.length, name:g.name||'', air:eps[0].air_date || (from===1 ? src.air : null), poster:src.poster||null, src:{s:sn, from, to}, starts});
+    }
+    if (!ok || vs.length<=reg) continue;
+    const covered = vs.reduce((a,v) => a+v.eps, 0);
+    if (covered < d.total - 2) continue;
+    if (d.next){ const v = vs.find(v2 => v2.src.s===d.next.s && d.next.e>=v2.src.from && d.next.e<=v2.src.to + 1);
+      d.next = v ? {s:v.n, e:d.next.e - v.src.from + 1, air:d.next.air} : d.next; }
+    d.seasons = vs.map(({starts, ...v}) => v); d.total = covered; d.virt = true;
+    d.vsrc = vs.map(v => ({n:v.n, ...v.src})); d.vparts = Object.fromEntries(vs.map(v => [v.n, v.starts]));
+    return;
+  }
+}
+// ticks saved with TMDB's numbering are moved to the real seasons, once
+function migrateEntry(key){
+  const e = entries.get(key), d = dcache[key];
+  if (!e || !d || !d.virt || e.vv) return;
+  const oldW = e.w||{}, w = {}, ss = {}, skip = [];
+  for (const v of d.vsrc){
+    const len = v.to - v.from + 1, seen = Math.max(0, Math.min(len, (oldW[v.s]||0) - (v.from-1)));
+    w[v.n] = seen;
+    if ((e.skip||[]).includes(v.s) || (e.stop!=null && v.s > e.stop)) skip.push(v.n);
+    if ((e.ss||{})[v.s]==='watching' && seen<len && (oldW[v.s]||0) >= v.from-1) ss[v.n] = 'watching';
+  }
+  if (oldW[0]) w[0] = oldW[0];
+  save(key, {w, ss, skip, stop:null, vv:true}, {quiet:true});
+}
 function details(key, force){
   const c = dcache[key];
   if (c && !force && fresh(c)) return Promise.resolve(c);
   if (loadingD.has(key)) return loadingD.get(key);
   const [kind, id] = key.split('-');
   const p = (async () => {
-    const x = await tmdb(`/${kind}/${id}`, {append_to_response:'watch/providers,keywords'});
+    const x = await tmdb(`/${kind}/${id}`, {append_to_response:'watch/providers,keywords,episode_groups'});
     const d = kind==='tv' ? normTv(x) : normMovie(x);
+    if (kind==='tv') await realSeasons(d, x);
     if (!d.ov){ try{ const en = await tmdb(`/${kind}/${id}`, {language:'en-US'}); d.ov = en.overview||''; d.ovEn = !!d.ov; }catch(e){} }
     if (dcache[key] && dcache[key].parts) d.parts = dcache[key].parts;   // keep the known split of seasons into parts
     dcache[key] = d; saveDcache();
-    const e = entries.get(key); if (e){ const m = snapOf(d); if (JSON.stringify(m)!==JSON.stringify(e.m)) save(key, {m}, {quiet:true}); }
+    const e = entries.get(key); if (e){ const m = snapOf(d); if (JSON.stringify(m)!==JSON.stringify(e.m)) save(key, {m}, {quiet:true}); migrateEntry(key); }
     return d;
   })().finally(() => loadingD.delete(key));
   loadingD.set(key, p); return p;
@@ -542,6 +590,7 @@ function pipsFor(key, d, e, n){
 // a season aired in two (or more) parts: a pause of more than 40 days between two episodes starts a new part
 const partsLoading = new Set();
 function partsOf(key, d, s){
+  if (d.virt) return (d.vparts && d.vparts[s.n]) || [1];
   const tag = `${s.n}:${s.eps}`, known = d.parts && d.parts[tag];
   if (known) return known;
   if (s.eps < 4 || partsLoading.has(key+tag)) return [1];
@@ -572,7 +621,7 @@ function watchRow(key, e){
   return `<article class="row">${cover}
     <div style="min-width:0">
       <h3 data-open="${key}" tabindex="0" role="button">${esc(d.t)}</h3>
-      <div class="s">${[d.seasons.length>1 ? esc(s.name||'Saison '+n) : '', behind>1 ? `${behind} de retard` : ''].filter(Boolean).join(', ')}</div>${nextLine(d)}
+      <div class="s">${[d.seasons.length>1 ? esc(seasonLabel(s)) : '', behind>1 ? `${behind} de retard` : ''].filter(Boolean).join(', ')}</div>${nextLine(d)}
       <div class="prog"><span class="count num"><b>${w}</b> / ${s.eps||'?'}</span>
         <button class="plus" type="button" data-plus="${key}" ${w>=aired?'disabled':''}>+1 épisode</button></div>
       ${pipsFor(key, d, e, n)}
@@ -1095,7 +1144,11 @@ function renderSheet(){
 }
 /* seasons: big rows with a clear "Marquer vue" button; "Déjà vu" first asks which seasons were seen */
 let pick = null;   // {key, sel:Set of season numbers} while choosing seen seasons
-const seasonLabel = s => s.n===0 ? 'Épisodes spéciaux' : (s.name && !/^saison\s*\d+$/i.test(s.name) ? `Saison ${s.n} : ${s.name}` : `Saison ${s.n}`);
+const seasonLabel = s => {
+  if (s.n===0) return 'Épisodes spéciaux';
+  const sub = String(s.name||'').replace(/^(season|saison|staffel)\s*\d+\s*[:：\-–]?\s*/i, '').trim();
+  return sub && !/^\d+$/.test(sub) ? `Saison ${s.n} : ${sub}` : `Saison ${s.n}`;
+};
 function setSeasonState(key, n, st){
   const d = dcache[key]; if (!d) return;
   if (!entries.has(key)) addFrom(key, 'plan');
@@ -1603,8 +1656,9 @@ function tidyStatuses(){
   }
 }
 async function refreshDetails(){
+  for (const k of entries.keys()) migrateEntry(k);
   if (refreshing) return; refreshing = true;
-  const stale = ([k,e]) => { const d = dcache[k]; if (!d || !d.kw) return true; if (!fresh(d)) return e.st!=='plan' || !d; return e.st==='done' && d.kind==='tv' && Date.now()-d.at > 2*DAY; };
+  const stale = ([k,e]) => { const d = dcache[k]; if (!d || !d.kw || (d.kind==='tv' && !d.vchk)) return true; if (!fresh(d)) return e.st!=='plan' || !d; return e.st==='done' && d.kind==='tv' && Date.now()-d.at > 2*DAY; };
   const keys = [...entries.entries()].filter(stale).map(([k]) => k);
   for (const k of keys){ try{ await details(k); }catch(e){ if (e.message.includes('Clé')) break; } await new Promise(r => setTimeout(r, 120)); }
   refreshing = false; tidyStatuses(); render();
